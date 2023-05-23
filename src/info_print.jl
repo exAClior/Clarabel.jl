@@ -128,6 +128,8 @@ function print_settings(io::IO, settings::Settings{T}) where {T}
 
     if(set.direct_kkt_solver)
         @printf(io, "  linear algebra: direct / %s, precision: %s\n", set.direct_solve_method, get_precision_string(T))
+    else
+        @printf(io, " linear algebra: indirect / %s, precision: %s\n", set.indirect_solve_method, get_precision_string(T))
     end
 
     @printf(io, "  max iter = %i, time limit = %f,  max step = %.3f\n",

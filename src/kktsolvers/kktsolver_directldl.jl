@@ -66,6 +66,9 @@ mutable struct DirectLDLKKTSolver{T} <: AbstractKKTSolver{T}
         #which LDL solver should I use?
         ldlsolverT = _get_ldlsolver_type(settings.direct_solve_method)
 
+        # what device should I use?
+        device = settings.device
+
         #does it want a :triu or :tril KKT matrix?
         kktshape = required_matrix_shape(ldlsolverT)
         KKT, map = _assemble_kkt_matrix(P,A,cones,kktshape)

@@ -43,8 +43,9 @@ min\\_terminate\\_step\\_length         | 1e-4      | minimum step size allowed 
 ||
 __Linear Solver Settings__||
 ||
-direct\\_kkt\\_solver                   | true      | use a direct linear solver method (required true)
+direct\\_kkt\\_solver                   | true      | use a direct linear solver method
 direct\\_solve\\_method                 | :qdldl    | direct linear solver (:qdldl, :mkl or :cholmod)
+indirect\\_solve\\_method               | :minres   | indirect solver method (:minres for now)
 static\\_regularization\\_enable        | true      | enable KKT static regularization
 static\\_regularization\\_eps           | 1e-7      | KKT static regularization parameter
 static\\_regularization\\_proportional  | eps(T)^2  | additional regularization parameter w.r.t. the maximum abs diagonal term
@@ -98,6 +99,10 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     #can be :qdldl or :mkl
     direct_kkt_solver::Bool             = true   #indirect not yet supported
     direct_solve_method::Symbol         = :qdldl
+    
+    # indirect solve method
+    # for now, we use MINRES
+    indirect_solve_method::Symbol       = :minres
 
     #static regularization parameters
     static_regularization_enable::Bool    = true
@@ -119,6 +124,9 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     
     #preprocessing 
     presolve_enable::Bool               = true
+
+    # device: can be :cpu or :gpu_cuda
+    device::Symbol                      = :cpu
 
 end
 
