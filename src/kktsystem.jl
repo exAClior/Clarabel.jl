@@ -29,8 +29,11 @@ mutable struct DefaultKKTSystem{T} <: AbstractKKTSystem{T}
         #basic problem dimensions
         (m, n) = (data.m, data.n)
 
-        #create the linear solver.  Always LDL for now
-        kktsolver = DirectLDLKKTSolver{T}(data.P,data.A,cones,m,n,settings)
+        if settings.direct_kkt_solver
+            kktsolver = DirectLDLKKTSolver{T}(data.P,data.A,cones,m,n,settings)
+        else
+            kktsolver = IndirectMINRESKKTSolver{T}(data.P,data.A,cones,m,n,settings)
+        end
 
         #the LHS constant part of the reduced solve
         x1   = Vector{T}(undef,n)
