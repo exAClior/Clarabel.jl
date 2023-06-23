@@ -60,23 +60,23 @@ struct MINRESDataMap
 
 end
 
-function _allocate_kkt_Hsblocks(type::Type{T}, cones) where{T <: Real}
+# function _allocate_kkt_Hsblocks(type::Type{T}, cones) where{T <: Real}
 
-    ncones    = length(cones)
-    Hsblocks = Vector{Vector{T}}(undef,ncones)
+#     ncones    = length(cones)
+#     Hsblocks = Vector{Vector{T}}(undef,ncones)
 
-    for (i, cone) in enumerate(cones)
-        nvars = numel(cone)
-        if Hs_is_diagonal(cone)
-            numelblock = nvars
-        else #dense triangle
-            numelblock = triangular_number(nvars) #must be Int
-        end
-        Hsblocks[i] = Vector{T}(undef,numelblock)
-    end
+#     for (i, cone) in enumerate(cones)
+#         nvars = numel(cone)
+#         if Hs_is_diagonal(cone)
+#             numelblock = nvars
+#         else #dense triangle
+#             numelblock = triangular_number(nvars) #must be Int
+#         end
+#         Hsblocks[i] = Vector{T}(undef,numelblock)
+#     end
 
-    return Hsblocks
-end
+#     return Hsblocks
+# end
 
 
 # todo: commented out to get to compile -> add util functions needed for indirect solve here

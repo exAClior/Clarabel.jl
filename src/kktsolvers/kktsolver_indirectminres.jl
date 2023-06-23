@@ -2,6 +2,9 @@
 # KKTSolver using indirect MINRES
 # -------------------------------------
 
+##############################################################
+# YC: Some functions are repeated as in the direct solver, which are better to be removed
+##############################################################
 mutable struct IndirectMINRESKKTSolver{T} <: AbstractKKTSolver{T}
 
     # problem dimensions
@@ -116,24 +119,23 @@ function _update_values!(
     #Update values in the KKT matrix K
     _update_values_KKT!(KKT,index,values)
 
-    #give the LDL subsolver an opportunity to update the same
-    #values if needed.   This latter is useful for QDLDL
-    #since it stores its own permuted copy
-    update_values!(minressolver,index,values)
+    #YC: Update the copy in the indirect solver for the preliminary GPU computing
+    #    but I think we should remove it later as it is redundant and only for testing GPU
+    _update_values_KKT!(minressolver.KKT,index,values)
 
 end
 
-#updates KKT matrix values
-function _update_values_KKT!(
-    KKT::SparseMatrixCSC{T,Int},
-    index::Vector{Ti},
-    values::Vector{T}
-) where{T,Ti}
+# #updates KKT matrix values
+# function _update_values_KKT!(
+#     KKT::SparseMatrixCSC{T,Int},
+#     index::Vector{Ti},
+#     values::Vector{T}
+# ) where{T,Ti}
 
-    #Update values in the KKT matrix K
-    @. KKT.nzval[index] = values
+#     #Update values in the KKT matrix K
+#     @. KKT.nzval[index] = values
 
-end
+# end
 
 #scale entries in the kktsolver object using the
 #given index into its CSC representation
@@ -147,24 +149,22 @@ function _scale_values!(
     #Update values in the KKT matrix K
     _scale_values_KKT!(KKT,index,scale)
 
-    #give the LDL subsolver an opportunity to update the same
-    #values if needed.   This latter is useful for QDLDL
-    #since it stores its own permuted copy
+    #YC: scale the copy in the minres solver, may not need it later
     scale_values!(minressolver,index,scale)
 
 end
 
-#updates KKT matrix values
-function _scale_values_KKT!(
-    KKT::SparseMatrixCSC{T,Int},
-    index::Vector{Ti},
-    scale::T
-) where{T,Ti}
+# #updates KKT matrix values
+# function _scale_values_KKT!(
+#     KKT::SparseMatrixCSC{T,Int},
+#     index::Vector{Ti},
+#     scale::T
+# ) where{T,Ti}
 
-    #Update values in the KKT matrix K
-    @. KKT.nzval[index] *= scale
+#     #Update values in the KKT matrix K
+#     @. KKT.nzval[index] *= scale
 
-end
+# end
 
 
 function kktsolver_update!(
@@ -238,6 +238,7 @@ function _kktsolver_regularize_and_refactor!(
     settings      = kktsolver.settings
     map           = kktsolver.map
     KKT           = kktsolver.KKT
+    KKTsym        = kktsolver.KKTsym
     Dsigns        = kktsolver.Dsigns
     diag_kkt      = kktsolver.work1
     diag_shifted  = kktsolver.work2
@@ -264,7 +265,10 @@ function _kktsolver_regularize_and_refactor!(
 
     end
 
+    # YC: we don't need refactor! but update_preconditioner in the indirect methods
     is_success = refactor!(minressolver,KKT)
+
+    update_preconditioner(minressolver,KKTsym)  #YC: update the preconditioner
 
     if(settings.static_regularization_enable)
 
@@ -280,20 +284,20 @@ function _kktsolver_regularize_and_refactor!(
 end
 
 
-function _compute_regularizer(
-    diag_kkt::AbstractVector{T},
-    settings::Settings{T}
-) where {T}
+# function _compute_regularizer(
+#     diag_kkt::AbstractVector{T},
+#     settings::Settings{T}
+# ) where {T}
 
-    maxdiag  = norm(diag_kkt,Inf);
+#     maxdiag  = norm(diag_kkt,Inf);
 
-    # Compute a new regularizer
-    regularizer =  settings.static_regularization_constant +
-                   settings.static_regularization_proportional * maxdiag
+#     # Compute a new regularizer
+#     regularizer =  settings.static_regularization_constant +
+#                    settings.static_regularization_proportional * maxdiag
 
-    return regularizer
+#     return regularizer
 
-end
+# end
 
 
 function kktsolver_setrhs!(
@@ -355,10 +359,11 @@ function kktsolver_solve!(
     return is_success
 end
 
-# todo: do we need iterative refinement in an indirect solve?
+# YC: need an efficient refinement as the indirect solver doesn't factorize
+#     a system but repeat the multiplication iteratively
 function  _iterative_refinement(
     kktsolver::IndirectMINRESKKTSolver{T},
-     minressolver::AbstractIndirectMINRESSolver{T}
+    minressolver::AbstractIndirectMINRESSolver{T}
 ) where{T}
 
     (x,b)   = (kktsolver.x,kktsolver.b)
@@ -376,6 +381,8 @@ function  _iterative_refinement(
 
     #compute the initial error
     norme = _get_refine_error!(e,b,KKTsym,x)
+
+    # println("error is: ", norme)
 
     for i = 1:IR_maxiter
 
@@ -417,18 +424,18 @@ function  _iterative_refinement(
 end
 
 
-# computes e = b - Kξ, overwriting the first argument
-# and returning its norm
+# # computes e = b - Kξ, overwriting the first argument
+# # and returning its norm
 
-function _get_refine_error!(
-    e::AbstractVector{T},
-    b::AbstractVector{T},
-    KKTsym::Symmetric{T},
-    ξ::AbstractVector{T}) where {T}
+# function _get_refine_error!(
+#     e::AbstractVector{T},
+#     b::AbstractVector{T},
+#     KKTsym::Symmetric{T},
+#     ξ::AbstractVector{T}) where {T}
 
-    @. e = b
-    mul!(e,KKTsym,ξ,-1.,1.)   # e = b - Kξ
+#     @. e = b
+#     mul!(e,KKTsym,ξ,-1.,1.)   # e = b - Kξ
 
-    return norm(e,Inf)
+#     return norm(e,Inf)
 
-end
+# end
