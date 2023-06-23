@@ -1,6 +1,6 @@
 using Test, LinearAlgebra, Random, SparseArrays
 
-# using Clarabel
+using Clarabel
 
 # using StatProfilerHTML
 # include("../../src\\Clarabel.jl")
