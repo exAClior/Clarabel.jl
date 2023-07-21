@@ -15,7 +15,7 @@ function SOCP_lasso_data(Type::Type{T}) where {T <: AbstractFloat}
 
     # generate problem data
     rng = Random.MersenneTwister(12345)
-    n = 8
+    n = 2
     m = 50 * n
     F = rand(rng, T, m, n)
 
@@ -41,7 +41,7 @@ function SOCP_lasso_data(Type::Type{T}) where {T <: AbstractFloat}
 
     c = [one(T); zeros(T, n); μ * ones(T, n); zeros(T, m + 2)]
     P = spzeros(T, length(c), length(c))
-    P = sparse(I(length(c))*one(T))
+    P = sparse(I(length(c))*one(T)*1e-6)
 
     A = [A1;A2;A3]
     b = [b1;b2;b3]
@@ -58,14 +58,14 @@ end
 
 settings = Clarabel.Settings(
         equilibrate_enable=false,
-        direct_kkt_solver=false,
+        direct_kkt_solver=true,
         static_regularization_enable=false,
         presolve_enable=false,
-        iterative_refinement_enable = false,
-        # tol_gap_abs = 1e-5,
-        # tol_gap_rel = 1e-5,
-        # tol_feas = 1e-5,
-        # tol_ktratio = 1e-5
+        # iterative_refinement_enable = false,
+        tol_gap_abs = 1e-5,
+        tol_gap_rel = 1e-5,
+        tol_feas = 1e-5,
+        tol_ktratio = 1e-4
         )
 P,c,A,b,cones = SOCP_lasso_data(FloatT)
 solver   = Clarabel.Solver(P,c,A,b,cones,settings)

@@ -87,7 +87,7 @@ mutable struct IndirectMINRESKKTSolver{T} <: AbstractKKTSolver{T}
         KKTsym = Symmetric(KKT)
 
         #the LDL linear solver engine
-        minressolver = minressolverT{T}(KKT,Dsigns,settings)
+        minressolver = minressolverT{T}(KKTsym,Dsigns,settings)
 
         return new(m,n,p,x,b,
                    work_e,work_dx,map,Dsigns,Hsblocks,
@@ -119,23 +119,8 @@ function _update_values!(
     #Update values in the KKT matrix K
     _update_values_KKT!(KKT,index,values)
 
-    #YC: Update the copy in the indirect solver for the preliminary GPU computing
-    #    but I think we should remove it later as it is redundant and only for testing GPU
-    _update_values_KKT!(minressolver.KKT,index,values)
-
 end
 
-# #updates KKT matrix values
-# function _update_values_KKT!(
-#     KKT::SparseMatrixCSC{T,Int},
-#     index::Vector{Ti},
-#     values::Vector{T}
-# ) where{T,Ti}
-
-#     #Update values in the KKT matrix K
-#     @. KKT.nzval[index] = values
-
-# end
 
 #scale entries in the kktsolver object using the
 #given index into its CSC representation
@@ -149,22 +134,7 @@ function _scale_values!(
     #Update values in the KKT matrix K
     _scale_values_KKT!(KKT,index,scale)
 
-    #YC: scale the copy in the minres solver, may not need it later
-    scale_values!(minressolver,index,scale)
-
 end
-
-# #updates KKT matrix values
-# function _scale_values_KKT!(
-#     KKT::SparseMatrixCSC{T,Int},
-#     index::Vector{Ti},
-#     scale::T
-# ) where{T,Ti}
-
-#     #Update values in the KKT matrix K
-#     @. KKT.nzval[index] *= scale
-
-# end
 
 
 function kktsolver_update!(
@@ -265,7 +235,8 @@ function _kktsolver_regularize_and_refactor!(
 
     end
 
-    # YC: we don't need refactor! but update_preconditioner in the indirect methods
+    # YC: we copy KKT information here to the indirect solver,
+    # but update_preconditioner in the indirect methods
     is_success = refactor!(minressolver,KKT)
 
     update_preconditioner(minressolver,KKTsym)  #YC: update the preconditioner
@@ -361,6 +332,9 @@ end
 
 # YC: need an efficient refinement as the indirect solver doesn't factorize
 #     a system but repeat the multiplication iteratively
+
+#   Moreover, warm-start for the iterative refinement is also an issue
+
 function  _iterative_refinement(
     kktsolver::IndirectMINRESKKTSolver{T},
     minressolver::AbstractIndirectMINRESSolver{T}
