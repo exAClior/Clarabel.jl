@@ -239,7 +239,7 @@ function _kktsolver_regularize_and_refactor!(
     # but update_preconditioner in the indirect methods
     is_success = refactor!(minressolver,KKT)
 
-    update_preconditioner(minressolver,KKTsym)  #YC: update the preconditioner
+    update_preconditioner(minressolver,KKT,map.diag_full,kktsolver.m)  #YC: update the preconditioner
 
     if(settings.static_regularization_enable)
 
