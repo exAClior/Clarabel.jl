@@ -49,3 +49,16 @@ function solve!(
 ) where{T}
     error("function not implemented")
 end
+
+
+####################################################
+# Preconditioner
+####################################################
+abstract type AbstractPreconditioner{T <: AbstractFloat} <: AbstractMatrix{T} end
+
+function update_preconditioner(
+    KKT::SparseMatrixCSC{T,Ti},
+    preconditioner::AbstractPreconditioner{T}
+) where {T,Ti}
+    error("function not implemented")
+end

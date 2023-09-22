@@ -87,7 +87,7 @@ mutable struct IndirectMINRESKKTSolver{T} <: AbstractKKTSolver{T}
         KKTsym = Symmetric(KKT)
 
         #the LDL linear solver engine
-        minressolver = minressolverT{T}(KKTsym,Dsigns,settings)
+        minressolver = minressolverT{T}(KKTsym,settings,m,n)
 
         return new(m,n,p,x,b,
                    work_e,work_dx,map,Dsigns,Hsblocks,
@@ -237,9 +237,7 @@ function _kktsolver_regularize_and_refactor!(
 
     # YC: we copy KKT information here to the indirect solver,
     # but update_preconditioner in the indirect methods
-    is_success = refactor!(minressolver,KKT)
-
-    update_preconditioner(minressolver,KKT,map.diag_full,kktsolver.m)  #YC: update the preconditioner
+    is_success = refactor!(minressolver,KKT,diag_shifted)
 
     if(settings.static_regularization_enable)
 

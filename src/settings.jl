@@ -127,7 +127,7 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
 
     # device: can be :cpu or :gpu_cuda
     device::Symbol                      = :cpu
-    preconditioner                      = true
+    preconditioner                      = 1         #partial preconditioner
 
 end
 
