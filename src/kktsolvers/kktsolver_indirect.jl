@@ -1,11 +1,11 @@
 # -------------------------------------
-# KKTSolver using indirect MINRES
+# KKTSolver using indirect solvers
 # -------------------------------------
 
 ##############################################################
 # YC: Some functions are repeated as in the direct solver, which are better to be removed
 ##############################################################
-mutable struct IndirectMINRESKKTSolver{T} <: AbstractKKTSolver{T}
+mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
 
     # problem dimensions
     m::Int; n::Int; p::Int
@@ -20,7 +20,7 @@ mutable struct IndirectMINRESKKTSolver{T} <: AbstractKKTSolver{T}
     work2::Vector{T}
 
     #KKT mapping from problem data to KKT
-    map::LDLDataMap # todo: change to MINRESDataMap -> currently need this to compile
+    map::LDLDataMap # todo: change to IndirectDataMap -> currently need this to compile
 
     # todo: remove this 
     #the expected signs of D in KKT = LDL^T
@@ -41,17 +41,23 @@ mutable struct IndirectMINRESKKTSolver{T} <: AbstractKKTSolver{T}
     settings::Settings{T}
 
     #the direct linear LDL solver
-    minressolver::AbstractIndirectMINRESSolver{T}
+    indirectsolver::AbstractIndirectSolver{T}
 
     #the diagonal regularizer currently applied
     diagonal_regularizer::T
 
 
-    function IndirectMINRESKKTSolver{T}(P,A,cones,m,n,settings) where {T}
+    function IndirectKKTSolver{T}(P,A,cones,m,n,settings) where {T}
 
-        #solving in sparse format.  Need this many
-        #extra variables for SOCs
-        p = 2*cones.type_counts[SecondOrderCone]
+        # get a constructor for the LDL solver we should use,
+        # and also the matrix shape it requires
+        (kktshape, indirectsolverT) = _get_indirectsolver_config(settings)
+
+        #construct a KKT matrix of the right shape
+        KKT, map = _assemble_kkt_matrix(P,A,cones,kktshape)
+
+        #Need this many extra variables for sparse cones
+        p = pdim(map.sparse_maps)
 
         #LHS/RHS/work for iterative refinement
         x    = Vector{T}(undef,n+m+p)
@@ -62,23 +68,11 @@ mutable struct IndirectMINRESKKTSolver{T} <: AbstractKKTSolver{T}
         # todo: remove this
         #the expected signs of D in LDL
         Dsigns = Vector{Int}(undef,n+m+p)
-        _fill_Dsigns!(Dsigns,m,n,p)
+        _fill_Dsigns!(Dsigns,m,n,map)
 
         #updates to the diagonal of KKT will be
         #assigned here before updating matrix entries
         Hsblocks = _allocate_kkt_Hsblocks(T, cones)
-
-        #which LDL solver should I use?
-        #  minressolverT = _get_ minressolver_type(settings.direct_solve_method)
-        minressolverT = _get_minressolver_type(settings.indirect_solve_method)
-
-        # what device should I use?
-        device = settings.device # todo: adjust to GPU when dealing with GPU arrays
-
-        #does it want a :triu or :tril KKT matrix? 
-        # todo: prob doesn't matter here? since MINRES only requires symmetry, which is implcit
-        kktshape = required_matrix_shape(minressolverT)
-        KKT, map = _assemble_kkt_matrix(P,A,cones,kktshape)
 
         diagonal_regularizer = zero(T)
 
@@ -87,30 +81,42 @@ mutable struct IndirectMINRESKKTSolver{T} <: AbstractKKTSolver{T}
         KKTsym = Symmetric(KKT)
 
         #the LDL linear solver engine
-        minressolver = minressolverT{T}(KKTsym,settings,m,n)
+        indirectsolver = indirectsolverT{T}(KKTsym,settings,m,n)
 
         return new(m,n,p,x,b,
                    work_e,work_dx,map,Dsigns,Hsblocks,
-                   KKT,KKTsym,settings, minressolver,
+                   KKT,KKTsym,settings,indirectsolver,
                    diagonal_regularizer)
     end
 
 end
 
-IndirectMINRESKKTSolver(args...) = IndirectMINRESKKTSolver{DefaultFloat}(args...)
+IndirectKKTSolver(args...) = IndirectKKTSolver{DefaultFloat}(args...)
 
-function _get_minressolver_type(s::Symbol)
+function _get_indirectsolver_type(s::Symbol)
     try
-        return IndirectMINRESSolversDict[s]
+        return IndirectSolversDict[s]
     catch
-        throw(error("Unsupported indirect MINRES linear solver :", s))
+        throw(error("Unsupported indirect linear solver :", s))
     end
 end
+
+function _get_indirectsolver_config(settings::Settings)
+
+    #which LDL solver should I use?
+    indirectsolverT = _get_indirectsolver_type(settings.indirect_solve_method)
+
+    #does it want a :triu or :tril KKT matrix?
+    kktshape = required_matrix_shape(indirectsolverT)
+
+    (kktshape,indirectsolverT)
+end 
+
 
 #update entries in the kktsolver object using the
 #given index into its CSC representation
 function _update_values!(
-    minressolver::AbstractIndirectMINRESSolver{T},
+    indirectsolver::AbstractIndirectSolver{T},
     KKT::SparseMatrixCSC{T,Ti},
     index::Vector{Ti},
     values::Vector{T}
@@ -125,7 +131,7 @@ end
 #scale entries in the kktsolver object using the
 #given index into its CSC representation
 function _scale_values!(
-    minressolver::AbstractIndirectMINRESSolver{T},
+    indirectsolver::AbstractIndirectSolver{T},
     KKT::SparseMatrixCSC{T,Ti},
     index::Vector{Ti},
     scale::T
@@ -138,26 +144,26 @@ end
 
 
 function kktsolver_update!(
-    kktsolver:: IndirectMINRESKKTSolver{T},
+    kktsolver:: IndirectKKTSolver{T},
     cones::CompositeCone{T}
 ) where {T}
 
-    # the internal  minressolver is type unstable, so multiple
-    # calls to the  minressolvers will be very slow if called
+    # the internal  indirectsolver is type unstable, so multiple
+    # calls to the  indirectsolvers will be very slow if called
     # directly.   Grab it here and then call an inner function
-    # so that the  minressolver has concrete type
-    minressolver = kktsolver.minressolver
-    return _kktsolver_update_inner!(kktsolver,minressolver,cones)
+    # so that the  indirectsolver has concrete type
+    indirectsolver = kktsolver.indirectsolver
+    return _kktsolver_update_inner!(kktsolver,indirectsolver,cones)
 end
 
 
 function _kktsolver_update_inner!(
-    kktsolver:: IndirectMINRESKKTSolver{T},
-    minressolver::AbstractIndirectMINRESSolver{T},
+    kktsolver:: IndirectKKTSolver{T},
+    indirectsolver::AbstractIndirectSolver{T},
     cones::CompositeCone{T}
 ) where {T}
 
-    #real implementation is here, and now  minressolver
+    #real implementation is here, and now  indirectsolver
     #will be compiled to something concrete.
 
     settings  = kktsolver.settings
@@ -171,7 +177,7 @@ function _kktsolver_update_inner!(
         #change signs to get -W^TW
         # values .= -values
         @. values *= -one(T)
-        _update_values!(minressolver,KKT,index,values)
+        _update_values!(indirectsolver,KKT,index,values)
     end
 
     #update the scaled u and v columns.
@@ -182,27 +188,27 @@ function _kktsolver_update_inner!(
             η2 = cone.η^2
 
             #off diagonal columns (or rows)
-            _update_values!(minressolver,KKT,map.SOC_u[cidx],cone.u)
-            _update_values!(minressolver,KKT,map.SOC_v[cidx],cone.v)
-            _scale_values!(minressolver,KKT,map.SOC_u[cidx],-η2)
-            _scale_values!(minressolver,KKT,map.SOC_v[cidx],-η2)
+            _update_values!(indirectsolver,KKT,map.SOC_u[cidx],cone.u)
+            _update_values!(indirectsolver,KKT,map.SOC_v[cidx],cone.v)
+            _scale_values!(indirectsolver,KKT,map.SOC_u[cidx],-η2)
+            _scale_values!(indirectsolver,KKT,map.SOC_v[cidx],-η2)
 
 
             #add η^2*(1/-1) to diagonal in the extended rows/cols
-            _update_values!(minressolver,KKT,[map.SOC_D[cidx*2-1]],[-η2])
-            _update_values!(minressolver,KKT,[map.SOC_D[cidx*2  ]],[+η2])
+            _update_values!(indirectsolver,KKT,[map.SOC_D[cidx*2-1]],[-η2])
+            _update_values!(indirectsolver,KKT,[map.SOC_D[cidx*2  ]],[+η2])
 
             cidx += 1
         end
     end
 
-    return _kktsolver_regularize_and_refactor!(kktsolver,  minressolver)
+    return _kktsolver_regularize_and_refactor!(kktsolver,  indirectsolver)
 
 end
 
 function _kktsolver_regularize_and_refactor!(
-    kktsolver::IndirectMINRESKKTSolver{T},
-    minressolver::AbstractIndirectMINRESSolver{T}
+    kktsolver::IndirectKKTSolver{T},
+    indirectsolver::AbstractIndirectSolver{T}
 ) where{T}
 
     settings      = kktsolver.settings
@@ -226,8 +232,8 @@ function _kktsolver_regularize_and_refactor!(
             else               diag_shifted[i] -= ϵ
             end
         end
-        # overwrite the diagonal of KKT and within the  minressolver
-        _update_values!(minressolver,KKT,map.diag_full,diag_shifted)
+        # overwrite the diagonal of KKT and within the  indirectsolver
+        _update_values!(indirectsolver,KKT,map.diag_full,diag_shifted)
 
         # remember the value we used.  Not needed,
         # but possibly useful for debugging
@@ -237,12 +243,12 @@ function _kktsolver_regularize_and_refactor!(
 
     # YC: we copy KKT information here to the indirect solver,
     # but update_preconditioner in the indirect methods
-    is_success = refactor!(minressolver,KKT,diag_shifted)
+    is_success = refactor!(indirectsolver,KKT,diag_shifted)
 
     if(settings.static_regularization_enable)
 
         # put our internal copy of the KKT matrix back the way
-        # it was. Not necessary to fix the  minressolver copy because
+        # it was. Not necessary to fix the  indirectsolver copy because
         # this is only needed for our post-factorization IR scheme
 
         _update_values_KKT!(KKT,map.diag_full,diag_kkt)
@@ -270,7 +276,7 @@ end
 
 
 function kktsolver_setrhs!(
-    kktsolver::IndirectMINRESKKTSolver{T},
+    kktsolver::IndirectKKTSolver{T},
     rhsx::AbstractVector{T},
     rhsz::AbstractVector{T}
 ) where {T}
@@ -287,7 +293,7 @@ end
 
 
 function kktsolver_getlhs!(
-    kktsolver::IndirectMINRESKKTSolver{T},
+    kktsolver::IndirectKKTSolver{T},
     lhsx::Union{Nothing,AbstractVector{T}},
     lhsz::Union{Nothing,AbstractVector{T}}
 ) where {T}
@@ -303,18 +309,18 @@ end
 
 
 function kktsolver_solve!(
-    kktsolver::IndirectMINRESKKTSolver{T},
+    kktsolver::IndirectKKTSolver{T},
     lhsx::Union{Nothing,AbstractVector{T}},
     lhsz::Union{Nothing,AbstractVector{T}}
 ) where {T}
 
     (x,b) = (kktsolver.x,kktsolver.b)
-    solve!(kktsolver.minressolver,x,b)
+    solve!(kktsolver.indirectsolver,x,b)
 
     is_success = begin
         if(kktsolver.settings.iterative_refinement_enable)
             #IR reports success based on finite normed residual
-            is_success = _iterative_refinement(kktsolver,kktsolver.minressolver)
+            is_success = _iterative_refinement(kktsolver,kktsolver.indirectsolver)
         else
              # otherwise must directly verify finite values
             is_success = all(isfinite,x)
@@ -334,8 +340,8 @@ end
 #   Moreover, warm-start for the iterative refinement is also an issue
 
 function  _iterative_refinement(
-    kktsolver::IndirectMINRESKKTSolver{T},
-    minressolver::AbstractIndirectMINRESSolver{T}
+    kktsolver::IndirectKKTSolver{T},
+    indirectsolver::AbstractIndirectSolver{T}
 ) where{T}
 
     (x,b)   = (kktsolver.x,kktsolver.b)
@@ -368,7 +374,7 @@ function  _iterative_refinement(
         lastnorme = norme
 
         #make a refinement and continue
-        solve!(minressolver,dx,e)
+        solve!(indirectsolver,dx,e)
 
         #prospective solution is x + dx.   Use dx space to
         #hold it for a check before applying to x

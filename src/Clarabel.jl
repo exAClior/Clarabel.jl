@@ -49,10 +49,10 @@ module Clarabel
     include("./kktsystem.jl")
 
     # Indirect linear solve methods
-    include("./kktsolvers/indirect-minres/includes.jl")
+    include("./kktsolvers/indirect/includes.jl")
 
     # Indirect KKT solver
-    include("./kktsolvers/kktsolver_indirectminres.jl")
+    include("./kktsolvers/kktsolver_indirect.jl")
 
     # printing and top level solver
     include("./info_print.jl")

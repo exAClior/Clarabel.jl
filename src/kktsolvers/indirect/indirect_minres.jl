@@ -2,7 +2,7 @@ using Krylov
 using CUDA, CUDA.CUSPARSE, CUDA.CUSOLVER
 using LinearOperators
 
-struct MINRESIndirectSolver{T} <: AbstractIndirectMINRESSolver{T}
+struct MINRESIndirectSolver{T} <: AbstractIndirectSolver{T}
 
     solver#::MinresQlpSolver{T,T,AbstractVector{T}}
     KKT::AbstractSparseMatrix{T}
@@ -45,7 +45,7 @@ struct MINRESIndirectSolver{T} <: AbstractIndirectMINRESSolver{T}
 
 end
 
-IndirectMINRESSolversDict[:minres] = MINRESIndirectSolver
+IndirectSolversDict[:minres] = MINRESIndirectSolver
 required_matrix_shape(::Type{MINRESIndirectSolver}) = :triu
 
 

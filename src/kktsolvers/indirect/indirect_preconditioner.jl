@@ -37,7 +37,7 @@ end
 Base.size(M::DiagonalPreconditioner) = (size(M,1),size(M,2))
 
 function update_preconditioner(
-    solver::AbstractIndirectMINRESSolver{T},
+    solver::AbstractIndirectSolver{T},
     diagval::AbstractVector{T}
 ) where {T}
     KKT = solver.KKTcpu

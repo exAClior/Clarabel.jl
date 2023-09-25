@@ -32,7 +32,7 @@ mutable struct DefaultKKTSystem{T} <: AbstractKKTSystem{T}
         if settings.direct_kkt_solver
             kktsolver = DirectLDLKKTSolver{T}(data.P,data.A,cones,m,n,settings)
         else
-            kktsolver = IndirectMINRESKKTSolver{T}(data.P,data.A,cones,m,n,settings)
+            kktsolver = IndirectKKTSolver{T}(data.P,data.A,cones,m,n,settings)
         end
 
         #the LHS constant part of the reduced solve
