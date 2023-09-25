@@ -80,7 +80,7 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
         #the following to allow products like KKT*x
         KKTsym = Symmetric(KKT)
 
-        #the LDL linear solver engine
+        #the indirect linear solver engine
         indirectsolver = indirectsolverT{T}(KKTsym,settings,m,n)
 
         return new(m,n,p,x,b,
