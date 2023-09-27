@@ -165,6 +165,7 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
         b::AbstractVector{T},
         cones::CompositeCone{T},
         presolver::Presolver{T},
+        settings::Settings{T}
     ) where {T}
 
         # dimension checks will have already been
@@ -172,7 +173,7 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
 
         #take an internal copy of all problem
         #data, since we are going to scale it
-        P = triu(P)
+        P = settings.direct_kkt_solver ? triu(P) : SparseMatrixCSC(Symmetric(triu(P)));
         q = deepcopy(q)
 
         (A,b) = let  

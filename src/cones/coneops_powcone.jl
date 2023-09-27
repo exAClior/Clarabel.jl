@@ -93,11 +93,12 @@ end
 # return μH*(z) for power cone
 function get_Hs!(
     K::PowerCone{T},
-    Hsblock::AbstractVector{T}
+    Hsblock::AbstractVector{T},
+    directsolver::Bool
 ) where {T}
 
     #Vectorize triu(K.μH)
-    pack_triu(Hsblock,K.Hs)
+    directsolver ? pack_triu(Hsblock,K.Hs) : pack_all(Hsblock,K.Hs)
 
 end
 

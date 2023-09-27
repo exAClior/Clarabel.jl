@@ -124,7 +124,8 @@ end
 
 function get_Hs!(
     K::AbstractCone{T},
-    Hsblock::AbstractVector{T}
+    Hsblock::AbstractVector{T},
+    directsolver::Bool
 ) where {T}
 
     error("Incomplete cone operation specification: ",typeof(K))

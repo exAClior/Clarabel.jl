@@ -96,7 +96,7 @@ function setup!(
         presolver = Presolver{T}(A,b,cones,s.settings)
 
         s.cones  = CompositeCone{T}(presolver.cone_specs)
-        s.data   = DefaultProblemData{T}(P,q,A,b,s.cones,presolver)
+        s.data   = DefaultProblemData{T}(P,q,A,b,s.cones,presolver,s.settings)
         s.data.m == s.cones.numel || throw(DimensionMismatch())
 
         s.variables = DefaultVariables{T}(s.data.n,s.cones)

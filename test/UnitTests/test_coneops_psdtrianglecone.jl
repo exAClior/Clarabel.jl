@@ -237,7 +237,7 @@ FloatT = Float64
         Hs = triu(ones(K.numel,K.numel))
         idxHs = findall(Hs .!= 0)
         vecHs = zeros(FloatT,length(idxHs))
-        Clarabel.get_Hs!(K,vecHs)
+        Clarabel.get_Hs!(K,vecHs,true)
         Hs[idxHs] = vecHs
         #make Symmetric for products
         Hssym = Symmetric(Hs)

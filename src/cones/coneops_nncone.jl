@@ -90,7 +90,8 @@ end
 
 function get_Hs!(
     K::NonnegativeCone{T},
-    Hsblock::AbstractVector{T}
+    Hsblock::AbstractVector{T},
+    directsolver::Bool
 ) where {T}
 
     #this block is diagonal, and we expect here

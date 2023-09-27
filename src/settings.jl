@@ -97,7 +97,7 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
 
     #the direct linear solver to use
     #can be :qdldl or :mkl
-    direct_kkt_solver::Bool             = false   #indirect not yet supported
+    direct_kkt_solver::Bool             = false
     direct_solve_method::Symbol         = :qdldl
     
     # indirect solve method

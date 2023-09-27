@@ -12,15 +12,16 @@ struct MINRESIndirectSolver{T} <: AbstractIndirectSolver{T}
 
     #YC: additional parameter
     m::Int                          # number of constraints
+    p::Int                          # number of augmented constraints
     preconditioner::Int             #0 means disabled; 1 is the partial preconditioner and 2 is the norm preconditioner.
     cpu::Bool
     atol::T                         #YC: using iterative refinement atol and rtol values at present
     rtol::T
 
     # todo: implement settings parsing + delete Dsigns (keeping here just to mirror direct-ldl)
-    function MINRESIndirectSolver{T}(KKT0::Symmetric{T, SparseMatrixCSC{T,Int}}, settings,m,n) where {T}
+    function MINRESIndirectSolver{T}(KKT0::Symmetric{T, SparseMatrixCSC{T,Int}}, settings,m,n,p) where {T}
         
-        dim = m + n
+        dim = m + n + p
         cpu = (settings.device == :cpu) ? true : false;
         Vectype = (cpu) ? Vector : CuVector;
         M = DiagonalPreconditioner{T}(Vectype(ones(T,dim)))
@@ -40,14 +41,14 @@ struct MINRESIndirectSolver{T} <: AbstractIndirectSolver{T}
         rtol = settings.iterative_refinement_reltol
 
         return new(solver,KKT,KKTcpu,A,M,b,work,
-                m,preconditioner,cpu,
+                m,p,preconditioner,cpu,
                 atol,rtol)
     end
 
 end
 
 IndirectSolversDict[:minres] = MINRESIndirectSolver
-required_matrix_shape(::Type{MINRESIndirectSolver}) = :triu
+required_matrix_shape(::Type{MINRESIndirectSolver}) = :full
 
 # Diagonal Preconditioning
 function update_preconditioner(
@@ -61,16 +62,23 @@ function update_preconditioner(
     work = M.work
     dim = length(work)
     m = solver.m
+    p = solver.p
 
     #Diagonal partial preconditioner
     if (preconditioner == 1)
-        n = dim - m
-        workm = @view work[(dim-m+1):dim]
-        diagvalm = @view diagval[(dim-m+1):dim]
+        n = dim - m - p
         workn = @view work[1:n]
         diagvaln = @view diagval[1:n]
+        workm = @view work[(n+1):(n+m)]
+        diagvalm = @view diagval[(n+1):(n+m)]
         
         @. workm = -one(T)/diagvalm         # preconditioner for the constraint part, now assuming only linear inequality constraints
+        #inverse the absolute value for augmented diagonals
+        if (p > zero(T))
+            workp = @view work[n+m+1:end]
+            diagvalp = @view diagval[n+m+1:end]
+            @. workp =  one(T)/abs(diagvalp) 
+        end
 
         #compute diagonals of A'*H^{-1}*A
         @. workn = zero(T)

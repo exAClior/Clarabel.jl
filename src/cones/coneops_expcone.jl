@@ -91,11 +91,12 @@ end
 # return μH*(z) for exponential cone
 function get_Hs!(
     K::ExponentialCone{T},
-    Hsblock::AbstractVector{T}
+    Hsblock::AbstractVector{T},
+    directsolver::Bool
 ) where {T}
 
     # stores triu(K.Hs) into a vector
-    pack_triu(Hsblock,K.Hs)
+    directsolver ? pack_triu(Hsblock,K.Hs) : pack_all(Hsblock,K.Hs) 
 
 end
 

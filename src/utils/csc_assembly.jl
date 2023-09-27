@@ -25,6 +25,12 @@ function _csc_colcount_dense_triangle(K,initcol,blockcols,shape)
     end
 end
 
+#increment the K.colptr by the number of nonzeros
+#in a dense block on the diagonal.
+function _csc_colcount_dense_full(K,initcol,blockcols)
+    cols  = initcol:(initcol + (blockcols - 1))
+    @views K.colptr[cols] .+= blockcols
+end
 
 #increment the K.colptr by the number of nonzeros
 #in a square diagonal matrix placed on the diagonal.
@@ -45,6 +51,27 @@ function _csc_colcount_missing_diag(K,M,initcol)
             K.colptr[i + (initcol-1)] += 1
         end
     end
+end
+
+function _csc_colcount_missing_diag_full(K,M,initcol)
+
+    for i = 1:M.n
+        if((M.colptr[i] == M.colptr[i+1]) ||    #completely empty column
+           (i != _check_missing_diag_full(@view(M.rowval[M.colptr[i]:M.colptr[i+1]-1]), i))     #the i-th diagonal is missing
+          )
+            K.colptr[i + (initcol-1)] += 1
+        end
+    end
+end
+
+function _check_missing_diag_full(arr,k)
+    for val in arr
+        if (val >= k) 
+            return val  #val != k implies missing diagonal
+        end
+    end
+
+    return 0      #missing diagonal and all values in arr is smaller than k
 end
 
 #increment the K.colptr by the a number of nonzeros.
@@ -86,6 +113,16 @@ function _csc_colcount_block(K,M,initcol,shape::Symbol)
         for i = 1:M.n
             K.colptr[(initcol - 1) + i] += M.colptr[i+1]-M.colptr[i]
         end
+    end
+end
+
+function _csc_colcount_block_full(K,M,N,initcol)
+
+    @assert(M.n == N.n) #M and N should have the same column number
+
+    #just add the column count
+    for i = 1:M.n
+        K.colptr[(initcol - 1) + i] += (M.colptr[i+1]-M.colptr[i]) + (N.colptr[i+1]-N.colptr[i])
     end
 end
 
@@ -142,6 +179,40 @@ function _csc_fill_block(K,M,MtoKKT,initrow,initcol,shape)
     end
 end
 
+function _csc_fill_specific_diag_full(K,i,val)
+    dest           = K.colptr[i]
+    K.rowval[dest] = i
+    K.nzval[dest]  = val
+    K.colptr[i] += 1 
+end
+
+#fill P block with missing diagonal
+function _csc_fill_P_block_with_missing_diag_full(K,M,MtoKKT)
+    for i = 1:M.n
+        if(M.colptr[i] == M.colptr[i+1])    #completely empty column
+            _csc_fill_specific_diag_full(K,i,0)
+        else
+            ind = _check_missing_diag_full(@view(M.rowval[M.colptr[i]:M.colptr[i+1]-1]), i)
+
+            for j = M.colptr[i]:(M.colptr[i+1]-1)
+                col = i
+                row = M.rowval[j]
+                if (row == ind && row > col)            #insert the diagonal when it is missing in P and P has nonzero entry below the diagonal
+                    _csc_fill_specific_diag_full(K,i,0)     
+                end
+                dest           = K.colptr[col]
+                K.rowval[dest] = row
+                K.nzval[dest]  = M.nzval[j]
+                MtoKKT[j]      = dest
+                K.colptr[col] += 1
+            end
+            if (ind == 0)            #insert the diagonal when it is missing in P and P has no nonzero entry below the diagonal
+                _csc_fill_specific_diag_full(K,i,0)
+            end
+        end
+    end
+end
+
 #Populate the upper or lower triangle with 0s using the K.colptr
 #as indicator of next fill location in each row
 function _csc_fill_dense_triangle(K,blocktoKKT,offset,blockdim,shape)
@@ -177,6 +248,20 @@ function _fill_dense_triangle_tril(K,blocktoKKT,offset,blockdim)
     kidx = 1
     for row in offset:(offset + blockdim - 1)
         for col in offset:row
+            dest             = K.colptr[col]
+            K.rowval[dest]   = row
+            K.nzval[dest]    = 0.  #structural zero
+            K.colptr[col]   += 1
+            blocktoKKT[kidx] = dest
+            kidx = kidx + 1
+        end
+    end
+end
+
+function _csc_fill_dense_full(K,blocktoKKT,offset,blockdim)
+    kidx = 1
+    for col in offset:(offset + blockdim - 1)
+        for row in (offset:offset + blockdim - 1)
             dest             = K.colptr[col]
             K.rowval[dest]   = row
             K.nzval[dest]    = 0.  #structural zero
@@ -241,6 +326,22 @@ function _kkt_backshift_colptrs(K)
 
 end
 
+
+function _map_diag_full(K,diagind)
+    @assert (K.m == K.n)
+    for i = 1:K.n 
+        diagind[i] = _find_diag_ind_full(K,i)
+    end
+end
+
+function _find_diag_ind_full(K,i)
+    for j = K.colptr[i]:K.colptr[i+1] -1
+        if (K.rowval[j] == i) 
+            return j
+        end
+    end
+    error("No diagonal term found")
+end
 
 function _count_diagonal_entries(P)
 

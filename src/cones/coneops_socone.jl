@@ -155,7 +155,8 @@ end
 
 function get_Hs!(
     K::SecondOrderCone{T},
-    Hsblock::AbstractVector{T}
+    Hsblock::AbstractVector{T},
+    directsolver::Bool
 ) where {T}
 
     if is_sparse_expandable(K)
@@ -171,17 +172,33 @@ function get_Hs!(
         #for dense form, we return H = \eta^2 (2*ww^T - J), where 
         #J = diag(1,-I).  We are packing into dense triu form
 
-        Hsblock[1] = 2*K.w[1]^2 - one(T)
-        hidx = 2
+        if directsolver
+            #YC: we are assuming data is upper triangular, should also consider the lower triangular case
+            Hsblock[1] = 2*K.w[1]^2 - one(T)
+            hidx = 2
 
-        @inbounds for col in 2:K.dim
-            wcol = K.w[col]
-            @inbounds for row in 1:col 
-                Hsblock[hidx] = 2*K.w[row]*wcol
-                hidx += 1
-            end 
-            #go back to add the offset term from J 
-            Hsblock[hidx-1] += one(T)
+            @inbounds for col in 2:K.dim
+                wcol = K.w[col]
+                @inbounds for row in 1:col 
+                    Hsblock[hidx] = 2*K.w[row]*wcol
+                    hidx += 1
+                end 
+                #go back to add the offset term from J 
+                Hsblock[hidx-1] += one(T)
+            end
+        else
+            hidx = 1
+            @inbounds for col in 1:K.dim
+                wcol = K.w[col]
+                @inbounds for row in 1:K.dim
+                    Hsblock[hidx] = 2*K.w[row]*wcol
+                    hidx += 1
+                end 
+            end
+            Hsblock[1] -= one(T)
+            @inbounds for ind in 2:K.dim
+                Hsblock[(ind-1)*K.dim + ind] += one(T)
+            end
         end
         Hsblock .*= K.η^2
     end

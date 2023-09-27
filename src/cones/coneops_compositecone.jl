@@ -122,11 +122,12 @@ end
 # The Hs block for each cone.
 function get_Hs!(
     cones::CompositeCone{T},
-    Hsblocks::Vector{Vector{T}}
+    Hsblocks::Vector{Vector{T}},
+    directsolver::Bool
 ) where {T}
 
     for (cone, block) in zip(cones,Hsblocks)
-        @conedispatch get_Hs!(cone,block)
+        @conedispatch get_Hs!(cone,block,directsolver)
     end
     return nothing
 end

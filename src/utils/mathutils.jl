@@ -320,6 +320,18 @@ function pack_triu(v::AbstractVector{T},A::AbstractMatrix{T}) where T
     return v
 end
 
+function pack_all(v::AbstractVector{T},A::AbstractMatrix{T}) where T
+    n     = LinearAlgebra.checksquare(A)
+    numel = n*n
+    length(v) == numel || throw(DimensionMismatch())
+    k = 1
+    for col = 1:n, row = 1:n
+        @inbounds v[k] = A[row,col]
+        k += 1
+    end
+    return v
+end
+
 
 #------------------------------
 # special methods for solving 3x3 positive definite systems 
