@@ -19,16 +19,16 @@ struct MINRESIndirectSolver{T} <: AbstractIndirectSolver{T}
     rtol::T
 
     # todo: implement settings parsing + delete Dsigns (keeping here just to mirror direct-ldl)
-    function MINRESIndirectSolver{T}(KKT0::Symmetric{T, SparseMatrixCSC{T,Int}}, settings,m,n,p) where {T}
+    function MINRESIndirectSolver{T}(KKT0::SparseMatrixCSC{T,Int}, settings,m,n,p) where {T}
         
         dim = m + n + p
         cpu = (settings.device == :cpu) ? true : false;
         Vectype = (cpu) ? Vector : CuVector;
         M = DiagonalPreconditioner{T}(Vectype(ones(T,dim)))
 
-        #YC: We want to use CuSparseMatrixCSR instead of a Symmetric matrix to ensure faster computation
-        KKTcpu = SparseMatrixCSC(KKT0)      #YC: temporary use
-        KKT = (cpu) ? KKTcpu : CuSparseMatrixCSR(KKTcpu);     
+        #YC: KKTcpu shares the same memory with KKT0
+        KKTcpu = KKT0
+        KKT = (cpu) ? KKTcpu : CuSparseMatrixCSR(KKTcpu);     #We use CUDA if gpu is selected
         A = KKTcpu[n+1:dim,1:n]
 
         b = Vectype(ones(T,dim))
@@ -115,9 +115,6 @@ end
 #refactor the linear system
 function refactor!(minressolver::MINRESIndirectSolver{T}, KKT::SparseMatrixCSC, diagval::AbstractVector{T}) where{T}
 
-        #YC: simple copy of data with redundant copy for P, A, A' parts to GPU-KKT
-        fill_lower_triangular_symmetric!(KKT, minressolver.KKTcpu)
-
         update_preconditioner(minressolver, diagval)  #YC: update the preconditioner
 
         if (minressolver.cpu)    #cpu
@@ -156,29 +153,4 @@ function solve!(
 
     # todo: note that the second output of minres is the stats, perhaps might be useful to the user
 
-end
-
-
-###############################################
-# YC: temporary function for GPU implementation 
-###############################################
-function fill_lower_triangular_symmetric!(A::SparseMatrixCSC{T,Ti}, B::SparseMatrixCSC{T,Ti}) where {T,Ti}
-    # @assert LinearAlgebra.istriu(A)
-
-    n = LinearAlgebra.checksquare(B)
-    
-    for j in 1:n
-        colptr = B.colptr[j]
-        colptr_next = B.colptr[j + 1]
-
-        for k in colptr:colptr_next-1
-            rowidx = B.rowval[k]
-
-            if rowidx < j
-                B[rowidx, j] = A[rowidx, j]
-            else
-                B[rowidx, j] = A[j, rowidx]
-            end
-        end
-    end
 end

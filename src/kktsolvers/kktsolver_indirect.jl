@@ -32,9 +32,6 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
     #unpermuted KKT matrix
     KKT::SparseMatrixCSC{T,Int}
 
-    #symmetric view for residual calcs
-    KKTsym::Symmetric{T, SparseMatrixCSC{T,Int}}
-
     #settings just points back to the main solver settings.
     #Required since there is no separate LDL settings container
     settings::Settings{T}
@@ -74,16 +71,12 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
 
         diagonal_regularizer = zero(T)
 
-        #KKT will be triu data only, but we will want
-        #the following to allow products like KKT*x
-        KKTsym = Symmetric(KKT)
-
         #the indirect linear solver engine
-        indirectsolver = indirectsolverT{T}(KKTsym,settings,m,n,pdim(map.sparse_maps))
+        indirectsolver = indirectsolverT{T}(KKT,settings,m,n,pdim(map.sparse_maps))
 
         return new(m,n,p,x,b,
                    work_e,work_dx,map,Dsigns,Hsblocks,
-                   KKT,KKTsym,settings,indirectsolver,
+                   KKT,settings,indirectsolver,
                    diagonal_regularizer)
     end
 
@@ -120,8 +113,9 @@ function _update_values!(
     values::AbstractVector{T}
 ) where{T,Ti}
 
+    #YC: should tailored when using GPU
     #Update values in the KKT matrix K
-    _update_values_KKT!(KKT,index,values)
+    @. KKT.nzval[index] = values
 
 end
 
@@ -135,8 +129,9 @@ function _scale_values!(
     scale::T
 ) where{T,Ti}
 
+    #YC: should tailored when using GPU
     #Update values in the KKT matrix K
-    _scale_values_KKT!(KKT,index,scale)
+    @. KKT.nzval[index] *= scale
 
 end
 
@@ -340,11 +335,11 @@ function  _iterative_refinement(
     IR_maxiter   = settings.iterative_refinement_max_iter
     IR_stopratio = settings.iterative_refinement_stop_ratio
 
-    KKTsym = kktsolver.KKTsym
+    KKT = kktsolver.KKT
     normb  = norm(b,Inf)
 
     #compute the initial error
-    norme = _get_refine_error!(e,b,KKTsym,x)
+    norme = _get_refine_error!(e,b,KKT,x)
     isfinite(norme) || return is_success = false
 
     # println("error is: ", norme)
@@ -363,7 +358,7 @@ function  _iterative_refinement(
         #prospective solution is x + dx.   Use dx space to
         #hold it for a check before applying to x
         @. dx += x
-        norme = _get_refine_error!(e,b,KKTsym,dx)
+        norme = _get_refine_error!(e,b,KKT,dx)
         isfinite(norme) || return is_success = false
 
         improved_ratio = lastnorme/norme
@@ -390,15 +385,15 @@ end
 # # computes e = b - Kξ, overwriting the first argument
 # # and returning its norm
 
-# function _get_refine_error!(
-#     e::AbstractVector{T},
-#     b::AbstractVector{T},
-#     KKTsym::Symmetric{T},
-#     ξ::AbstractVector{T}) where {T}
+function _get_refine_error!(
+    e::AbstractVector{T},
+    b::AbstractVector{T},
+    KKT::SparseMatrixCSC{T, Ti},
+    ξ::AbstractVector{T}) where {T,Ti}
 
-#     @. e = b
-#     mul!(e,KKTsym,ξ,-1.,1.)   # e = b - Kξ
+    @. e = b
+    mul!(e,KKT,ξ,-1.,1.)   # e = b - Kξ
 
-#     return norm(e,Inf)
+    return norm(e,Inf)
 
-# end
+end
