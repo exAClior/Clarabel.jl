@@ -53,6 +53,7 @@ module Clarabel
 
     # Indirect KKT solver
     include("./kktsolvers/kktsolver_indirect.jl")
+    include("./kktsolvers/indirect/preconditioner/indirect_diagonal_preconditioner.jl")
 
     # printing and top level solver
     include("./info_print.jl")

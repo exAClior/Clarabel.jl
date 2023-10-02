@@ -11,13 +11,13 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
     m::Int; n::Int; p::Int
 
     # Left and right hand sides for solves
-    x::Vector{T}
-    b::Vector{T}
+    x::AbstractVector{T}
+    b::AbstractVector{T}
 
     # internal workspace for IR scheme
     # and static offsetting of KKT
-    work1::Vector{T}
-    work2::Vector{T}
+    work1::AbstractVector{T}
+    work2::AbstractVector{T}
 
     #KKT mapping from problem data to KKT
     map::IndirectDataMap 
@@ -43,11 +43,18 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
     diagonal_regularizer::T
 
 
+    #YC: additional parameters
+    A::SparseMatrixCSC{T,Int}
+    M::Union{AbstractPreconditioner{T},UniformScaling{Bool}} #YC: Right now, we use the diagonal preconditioner, 
+                                    #    but we need to find a better option 
+
+
     function IndirectKKTSolver{T}(P,A,cones,m,n,settings) where {T}
 
         # get a constructor for the LDL solver we should use,
         # and also the matrix shape it requires
-        (kktshape, indirectsolverT) = _get_indirectsolver_config(settings)
+        (kktshape, indirectsolverT, preconditionerT) = _get_indirectsolver_config(settings)
+        Vectype = ((settings.device == :cpu)) ? Vector : CuVector;
 
         #construct a KKT matrix of the right shape
         KKT, map = _assemble_full_kkt_matrix(P,A,cones,kktshape)
@@ -67,17 +74,24 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
 
         #updates to the diagonal of KKT will be
         #assigned here before updating matrix entries
+        dim = m + n + p
+        A = KKT[n+1:dim,1:n]
+
         Hsblocks = _allocate_full_kkt_Hsblocks(T, cones)
+
+        M = preconditionerT{T,Vectype}(m,n,KKT)
 
         diagonal_regularizer = zero(T)
 
         #the indirect linear solver engine
-        indirectsolver = indirectsolverT{T}(KKT,settings,m,n,pdim(map.sparse_maps))
+        indirectsolver = indirectsolverT{T}(KKT,settings)
 
         return new(m,n,p,x,b,
                    work_e,work_dx,map,Dsigns,Hsblocks,
                    KKT,settings,indirectsolver,
-                   diagonal_regularizer)
+                   diagonal_regularizer,
+                   A,M
+                   )
     end
 
 end
@@ -92,6 +106,14 @@ function _get_indirectsolver_type(s::Symbol)
     end
 end
 
+function _get_preconditioner_type(s::Int)
+    try
+        return PreconditionersDict[s]
+    catch
+        throw(error("Unsupported indirect linear solver :", s))
+    end
+end
+
 function _get_indirectsolver_config(settings::Settings)
 
     #which LDL solver should I use?
@@ -100,7 +122,10 @@ function _get_indirectsolver_config(settings::Settings)
     #does it want a :triu or :tril KKT matrix?
     kktshape = required_matrix_shape(indirectsolverT)
 
-    (kktshape,indirectsolverT)
+    #Get the type of preconditioner
+    preconditionerT = _get_preconditioner_type(settings.preconditioner)
+
+    (kktshape,indirectsolverT,preconditionerT)
 end 
 
 
@@ -224,7 +249,12 @@ function _kktsolver_regularize_and_refactor!(
 
     # YC: we copy KKT information here to the indirect solver,
     # but update_preconditioner in the indirect methods
-    is_success = refactor!(indirectsolver,KKT,diag_shifted)
+    
+    if !(kktsolver.M === I)
+        update_preconditioner!(kktsolver, kktsolver.M, diag_shifted)  #YC: update the preconditioner
+    end
+
+    is_success = refactor!(indirectsolver)
 
     if(settings.static_regularization_enable)
 
@@ -296,7 +326,7 @@ function kktsolver_solve!(
 ) where {T}
 
     (x,b) = (kktsolver.x,kktsolver.b)
-    solve!(kktsolver.indirectsolver,x,b)
+    solve!(kktsolver.indirectsolver,kktsolver.M,x,b)
 
     is_success = begin
         if(kktsolver.settings.iterative_refinement_enable)
@@ -353,7 +383,7 @@ function  _iterative_refinement(
         lastnorme = norme
 
         #make a refinement and continue
-        solve!(indirectsolver,dx,e)
+        solve!(indirectsolver,kktsolver.M,dx,e)
 
         #prospective solution is x + dx.   Use dx space to
         #hold it for a check before applying to x

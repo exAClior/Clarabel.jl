@@ -1,5 +1,7 @@
 abstract type AbstractIndirectSolver{T <: AbstractFloat} end
 
+abstract type AbstractPreconditioner{T <: AbstractFloat, Tv} end
+
 const IndirectSolversDict = Dict{Symbol, UnionAll}()
 
 # Any new indirect solver type should provide implementations of all
@@ -44,21 +46,9 @@ end
 #solve the linear system
 function solve!(
     ldlsolver::AbstractIndirectSolver{T},
+    preconditioner::Union{AbstractPreconditioner{T},UniformScaling{Bool}},
     x::AbstractVector{T},
     b::AbstractVector{T}
 ) where{T}
-    error("function not implemented")
-end
-
-
-####################################################
-# Preconditioner
-####################################################
-abstract type AbstractPreconditioner{T <: AbstractFloat} <: AbstractMatrix{T} end
-
-function update_preconditioner(
-    KKT::SparseMatrixCSC{T,Ti},
-    preconditioner::AbstractPreconditioner{T}
-) where {T,Ti}
     error("function not implemented")
 end
