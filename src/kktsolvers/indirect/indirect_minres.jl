@@ -1,4 +1,4 @@
-struct MINRESIndirectSolver{T} <: AbstractIndirectSolver{T}
+mutable struct MINRESIndirectSolver{T} <: AbstractIndirectSolver{T}
 
     solver#::MinresQlpSolver{T,T,AbstractVector{T}}
     KKT::AbstractSparseMatrix{T}
@@ -67,8 +67,9 @@ function solve!(
     copyto!(minressolver.b,b)
 
     #Preconditioner
-    minres_qlp!(minressolver.solver,KKT, minressolver.b; M = preconditioner, ldiv = true, atol= minressolver.atol, rtol= minressolver.rtol)#,verbose= Int64(floor(length(b)/10)),history=true)  # verbose=n,history=true
+    minres_qlp!(minressolver.solver,KKT, minressolver.b; M = preconditioner, ldiv = true, itmax = 10*length(b), atol= minressolver.atol, rtol= minressolver.rtol)#,verbose= Int64(floor(length(b)/10)),history=true)  # verbose=n,history=true
 
+    # minressolver.iter += minressolver.solver.stats.niter
     # println("minres error: ", minressolver.solver.stats.niter)
 
     # println("Iter num", minressolver.solver.stats.niter)

@@ -244,7 +244,9 @@ function update_preconditioner!(
     if preconditioner.F === nothing
         preconditioner.F = QDLDL.qdldl(Hinvblocks, perm = nothing)
     else
+        preconditioner.F.workspace.triuA.nzval .= triu(Hinvblocks).nzval        #YC: for testing, should be optimized later
         QDLDL.refactor!(preconditioner.F)
+
         @assert all(isfinite, preconditioner.F.Dinv.diag)
     end
 
@@ -266,7 +268,11 @@ function update_preconditioner!(
     end
 
     @views Hinvblocks.nzval[1:n] .= workn .+ diagvaln
+
+    #update the first n diagonals and refactor the system
+    @views preconditioner.F.workspace.triuA.nzval[1:n] .= Hinvblocks.nzval[1:n]        #YC: for testing, should be optimized later
     QDLDL.refactor!(preconditioner.F)           #Later, this can be simplified to update only the first n parts
+
     @assert all(preconditioner.F.Dinv.diag .> zero(T))       #preconditioner need to be p.s.d.
 end
 
