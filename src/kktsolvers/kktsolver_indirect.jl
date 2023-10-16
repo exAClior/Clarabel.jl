@@ -28,6 +28,7 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
     # a vector for storing the Hs blocks
     # on the in the KKT matrix block diagonal
     Hsblocks::Vector{Vector{T}}
+    cones::CompositeCone{T}
 
     #unpermuted KKT matrix
     KKT::SparseMatrixCSC{T,Int}
@@ -87,7 +88,7 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
         indirectsolver = indirectsolverT{T}(KKT,settings)
 
         return new(m,n,p,x,b,
-                   work_e,work_dx,map,Dsigns,Hsblocks,
+                   work_e,work_dx,map,Dsigns,Hsblocks,cones,
                    KKT,settings,indirectsolver,
                    diagonal_regularizer,
                    A,M

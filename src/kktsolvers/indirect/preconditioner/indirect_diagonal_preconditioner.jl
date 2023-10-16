@@ -178,8 +178,9 @@ end
 mutable struct BlockDiagonalPreconditioner{T,Tv} <: AbstractPreconditioner{T,Tv}
     work::AbstractVector{T}
     n::Int
-    Hinvblocks::SparseMatrixCSC{T,Int}
-    F::Union{QDLDL.QDLDLFactorisation{T,Int}, Nothing}
+    HinvCpu::SparseMatrixCSC{T,Int}                     #CPU preconditioner matrix for preprocessing
+    F::Union{QDLDL.QDLDLFactorisation{T,Int}, Nothing}  #For the preconditioner via QDLDL (Disabled)
+    Hinv::AbstractSparseMatrix{T}                       #preconditioner matrix for computation
 
     function BlockDiagonalPreconditioner{T,Tv}(
         m::Int,
@@ -190,9 +191,10 @@ mutable struct BlockDiagonalPreconditioner{T,Tv} <: AbstractPreconditioner{T,Tv}
         dim = m+n
         work = ones(T,dim)
         F = nothing
-        Hinvblocks = blockdiag(spdiagm(0 => ones(n)),KKT[n+1:n+m,n+1:n+m])  #YC: additional copy for the inverse of Hessian
+        HinvCpu = blockdiag(spdiagm(0 => ones(n)),KKT[n+1:n+m,n+1:n+m])  #YC: additional copy for the inverse of Hessian
 
-        return new(work,n,Hinvblocks,F)
+        Hinv = (Tv === CuVector) ? CuSparseMatrixCSR(HinvCpu) : HinvCpu
+        return new(work,n,HinvCpu,F,Hinv)
     end
 
 end
@@ -202,10 +204,11 @@ function ldiv!(
     M::BlockDiagonalPreconditioner{T},
     x::AbstractVector{T}
 ) where {T}
-    copyto!(y,x)
-    QDLDL.solve!(M.F,y)
+    # copyto!(y,x)
+    # QDLDL.solve!(M.F,y)
+    mul!(y,M.Hinv,x)
 end
-ldiv!(M::BlockDiagonalPreconditioner,x::AbstractVector) = QDLDL.solve!(M.F,x)
+# ldiv!(M::BlockDiagonalPreconditioner,x::AbstractVector) = QDLDL.solve!(M.F,x)
 
 function Base.size(M::BlockDiagonalPreconditioner, idx)
     if(idx == 1 || idx == 2)
@@ -216,6 +219,68 @@ function Base.size(M::BlockDiagonalPreconditioner, idx)
 end
 Base.size(M::BlockDiagonalPreconditioner) = (size(M,1),size(M,2))
 
+###############################################################
+# #CPU implementation with ldiv! for preconditioner (Disabled)
+###############################################################
+
+# function update_preconditioner!(
+#     kktsolver::IndirectKKTSolver{T},
+#     preconditioner::BlockDiagonalPreconditioner{T},
+#     diagval::AbstractVector{T}
+# ) where {T}
+#     Hsblocks = kktsolver.Hsblocks
+#     HinvCpu = preconditioner.HinvCpu
+#     A = kktsolver.A
+#     ϵ = kktsolver.diagonal_regularizer
+#     n = kktsolver.n       #Update from the shift n + 1
+
+#     @views HinvCpu.nzval[1:n] .= one(T)   #Preallocate values equal to 1
+
+#     ind = n
+#     for Hsi in Hsblocks
+#         len = length(Hsi)
+#         @views HinvCpu.nzval[ind+1:ind+len] .= -one(T).*Hsi       #YC: reverse the sign change back
+#         ind += len
+#     end 
+
+#     @inbounds for i = (n+1):HinvCpu.n 
+#         HinvCpu[i,i] += ϵ
+#     end
+
+#     if preconditioner.F === nothing
+#         preconditioner.F = QDLDL.qdldl(HinvCpu, perm = nothing)
+#     else
+#         preconditioner.F.workspace.triuA.nzval .= triu(HinvCpu).nzval        #YC: for testing, should be optimized later
+#         QDLDL.refactor!(preconditioner.F)
+
+#         @assert all(isfinite, preconditioner.F.Dinv.diag)
+#     end
+
+#     #Update the first n diagonals
+#     workn = @view preconditioner.work[1:n]
+#     diagvaln = @view diagval[1:n]
+#     y1 = zeros(T,HinvCpu.n)      #YC: redundant memory, should be removed later
+
+#     #compute diagonals of A'*H^{-1}*A
+#     @. workn = zero(T)
+
+#     @inbounds @views for i= 1:n
+#         Ai = A[:,i]
+#         y1[n+1:end] .= Ai
+        
+#         #H^{-1} operator
+#         QDLDL.solve!(preconditioner.F,y1)
+#         workn[i] = dot(Ai,y1[n+1:end])
+#     end
+
+#     @views HinvCpu.nzval[1:n] .= workn .+ diagvaln
+
+#     #update the first n diagonals and refactor the system
+#     @views preconditioner.F.workspace.triuA.nzval[1:n] .= HinvCpu.nzval[1:n]        #YC: for testing, should be optimized later
+#     QDLDL.refactor!(preconditioner.F)           #Later, this can be simplified to update only the first n parts
+
+#     @assert all(preconditioner.F.Dinv.diag .> zero(T))       #preconditioner need to be p.s.d.
+# end
 
 function update_preconditioner!(
     kktsolver::IndirectKKTSolver{T},
@@ -223,57 +288,69 @@ function update_preconditioner!(
     diagval::AbstractVector{T}
 ) where {T}
     Hsblocks = kktsolver.Hsblocks
-    Hinvblocks = preconditioner.Hinvblocks
+    HinvCpu = preconditioner.HinvCpu
+    cones = kktsolver.cones
     A = kktsolver.A
     ϵ = kktsolver.diagonal_regularizer
     n = kktsolver.n       #Update from the shift n + 1
     
-    @views Hinvblocks.nzval[1:n] .= one(T)   #Preallocate values equal to 1
+    @views HinvCpu.nzval[1:n] .= zero(T)   #Preallocate values equal to 0
 
     ind = n
     for Hsi in Hsblocks
         len = length(Hsi)
-        @views Hinvblocks.nzval[ind+1:ind+len] .= -one(T).*Hsi       #YC: reverse the sign change back
+        @views HinvCpu.nzval[ind+1:ind+len] .= -one(T).*Hsi       #YC: reverse the sign change back
         ind += len
     end 
 
-    @inbounds for i = (n+1):Hinvblocks.n 
-        Hinvblocks[i,i] += ϵ
+    @inbounds for i = (n+1):HinvCpu.n 
+        HinvCpu[i,i] += ϵ
     end
 
-    if preconditioner.F === nothing
-        preconditioner.F = QDLDL.qdldl(Hinvblocks, perm = nothing)
-    else
-        preconditioner.F.workspace.triuA.nzval .= triu(Hinvblocks).nzval        #YC: for testing, should be optimized later
-        QDLDL.refactor!(preconditioner.F)
-
-        @assert all(isfinite, preconditioner.F.Dinv.diag)
-    end
+    #Compute the inverse matrix H^{-1} explicitly
+    ind = n
+    for (cone,Hsi) in zip(cones,Hsblocks)
+        len = length(Hsi)
+        if (Hs_is_diagonal(cone))
+            @. @views HinvCpu.nzval[ind+1:ind+len] = inv(HinvCpu.nzval[ind+1:ind+len])
+        else
+            dim = Int(sqrt(len))
+            tmp = reshape(Hsi,dim,dim)  
+            ww = Hsi
+            ww .= @views HinvCpu.nzval[ind+1:ind+len]
+            ww = vec(inv(tmp))                      #YC: memory issues
+            @views HinvCpu.nzval[ind+1:ind+len] .= ww
+        end
+        ind += len
+    end 
 
     #Update the first n diagonals
     workn = @view preconditioner.work[1:n]
     diagvaln = @view diagval[1:n]
-    y1 = zeros(T,Hinvblocks.n)      #YC: redundant memory, should be removed later
+    y1 = zeros(T,HinvCpu.n)      #YC: redundant memory, should be removed later
+    y2 = zeros(T,HinvCpu.n)
 
     #compute diagonals of A'*H^{-1}*A
     @. workn = zero(T)
 
-    @inbounds for i= 1:n
-        Ai = @view A[:,i]
-        @views y1[n+1:end] .= Ai
+    #Diagonal approximation for P+A'*H^{-1}*A
+    #YC: this part is quite efficient at present since Ai should be sparse and we can exploit it
+    @inbounds @views for i= 1:n
+        Ai = A[:,i]
+        y1[n+1:end] .= Ai
         
         #H^{-1} operator
-        QDLDL.solve!(preconditioner.F,y1)
-        workn[i] = dot(Ai,@view y1[n+1:end])
+        mul!(y2,HinvCpu,y1)
+        workn[i] = dot(Ai,y2[n+1:end])
     end
 
-    @views Hinvblocks.nzval[1:n] .= workn .+ diagvaln
+    @. @views HinvCpu.nzval[1:n] = inv(workn + diagvaln)
+    @assert all(workn .> zero(T))       #preconditioner need to be p.s.d.
 
-    #update the first n diagonals and refactor the system
-    @views preconditioner.F.workspace.triuA.nzval[1:n] .= Hinvblocks.nzval[1:n]        #YC: for testing, should be optimized later
-    QDLDL.refactor!(preconditioner.F)           #Later, this can be simplified to update only the first n parts
-
-    @assert all(preconditioner.F.Dinv.diag .> zero(T))       #preconditioner need to be p.s.d.
+    # GPU implementation
+    if !(kktsolver.indirectsolver.cpu)
+        copyto!(preconditioner.Hinv.nzVal, HinvCpu.nzval) 
+    end
 end
 
 # The internal values for the choice of preconditioners
