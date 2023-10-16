@@ -69,14 +69,3 @@ function update_preconditioner!(
     copyto!(M.L, LLDL.L)
     copyto!(M.D, LLDL.D)
 end
-
-
-
-# TODO: fix this
-# The internal values for the choice of preconditioners
-const PreconditionersDict = Dict([
-    0           => Clarabel.NoPreconditioner,
-    1           => Clarabel.IncompleteLDLPreconditioner,
-    2           => Clarabel.NormPreconditioner,
-    3           => Clarabel.BlockIncompleteLDLPreconditioner,
-])

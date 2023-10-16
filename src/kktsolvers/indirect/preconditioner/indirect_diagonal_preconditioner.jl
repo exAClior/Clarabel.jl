@@ -276,4 +276,5 @@ const PreconditionersDict = Dict([
     1           => Clarabel.DiagonalPreconditioner,
     2           => Clarabel.NormPreconditioner,
     3           => Clarabel.BlockDiagonalPreconditioner,
+    4           => Clarabel.IncompleteLDLPreconditioner
 ])
