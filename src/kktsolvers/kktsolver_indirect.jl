@@ -85,7 +85,7 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
         diagonal_regularizer = zero(T)
 
         #the indirect linear solver engine
-        indirectsolver = indirectsolverT{T}(KKT,settings)
+        indirectsolver = indirectsolverT{T}(KKT,A,settings)
 
         return new(m,n,p,x,b,
                    work_e,work_dx,map,Dsigns,Hsblocks,cones,

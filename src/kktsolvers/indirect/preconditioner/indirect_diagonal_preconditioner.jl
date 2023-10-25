@@ -352,11 +352,3 @@ function update_preconditioner!(
         copyto!(preconditioner.Hinv.nzVal, HinvCpu.nzval) 
     end
 end
-
-# The internal values for the choice of preconditioners
-const PreconditionersDict = Dict([
-    0           => Clarabel.NoPreconditioner,
-    1           => Clarabel.DiagonalPreconditioner,
-    2           => Clarabel.NormPreconditioner,
-    3           => Clarabel.BlockDiagonalPreconditioner,
-])

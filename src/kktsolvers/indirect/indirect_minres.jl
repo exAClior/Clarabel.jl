@@ -13,7 +13,7 @@ mutable struct MINRESIndirectSolver{T} <: AbstractIndirectSolver{T}
     rtol::T
 
     # todo: implement settings parsing + delete Dsigns (keeping here just to mirror direct-ldl)
-    function MINRESIndirectSolver{T}(KKT0::SparseMatrixCSC{T,Int}, settings) where {T}
+    function MINRESIndirectSolver{T}(KKT0::SparseMatrixCSC{T,Int}, A::SparseMatrixCSC{T,Int}, settings) where {T}
         
         cpu = (settings.device == :cpu) ? true : false;
         Vectype = (cpu) ? Vector : CuVector;
