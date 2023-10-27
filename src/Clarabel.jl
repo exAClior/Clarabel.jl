@@ -2,6 +2,7 @@ __precompile__()
 module Clarabel
 
     using SparseArrays, LinearAlgebra, Printf, Requires
+    using LimitedLDLFactorizations # for lldl
     const DefaultFloat = Float64
     const DefaultInt   = LinearAlgebra.BlasInt
     const IdentityMatrix = UniformScaling{Bool}
@@ -54,6 +55,7 @@ module Clarabel
     # Indirect KKT solver
     include("./kktsolvers/kktsolver_indirect.jl")
     include("./kktsolvers/indirect/preconditioner/indirect_diagonal_preconditioner.jl")
+    include("./kktsolvers/indirect/preconditioner/indirect_incompleteLDL_preconditioner.jl")
 
     # printing and top level solver
     include("./info_print.jl")

@@ -269,13 +269,3 @@ function update_preconditioner!(
     QDLDL.refactor!(preconditioner.F)           #Later, this can be simplified to update only the first n parts
     @assert all(preconditioner.F.Dinv.diag .> zero(T))       #preconditioner need to be p.s.d.
 end
-
-# The internal values for the choice of preconditioners
-const PreconditionersDict = Dict([
-    0           => Clarabel.NoPreconditioner,
-    1           => Clarabel.DiagonalPreconditioner,
-    2           => Clarabel.NormPreconditioner,
-    3           => Clarabel.BlockDiagonalPreconditioner,
-    4           => Clarabel.IncompleteLDLPreconditioner,
-    5           => Clarabel.BlockIncompleteLDLPreconditioner
-])
