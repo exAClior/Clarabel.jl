@@ -2,6 +2,7 @@ __precompile__()
 module Clarabel
 
     using SparseArrays, LinearAlgebra, Printf, Requires
+    using LimitedLDLFactorizations # for lldl
     const DefaultFloat = Float64
     const DefaultInt   = LinearAlgebra.BlasInt
     const IdentityMatrix = UniformScaling{Bool}
