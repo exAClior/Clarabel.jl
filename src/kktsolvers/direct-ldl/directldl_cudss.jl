@@ -1,24 +1,31 @@
 using CUDA, CUDA.CUSPARSE
 using CUDSS
 
+export CUDSSDirectLDLSolver
 struct CUDSSDirectLDLSolver{T} <: AbstractDirectLDLSolver{T}
 
     KKTgpu::AbstractSparseMatrix{T}
     cudssSolver::CUDSS.CudssSolver{T}
-    x::CudssMatrix{T}
-    b::CudssMatrix{T}
+    x::AbstractVector{T}
+    b::AbstractVector{T}
     
 
-    function CUDSSDirectLDLSolver{T}(KKT::SparseMatrixCSC{T},Dsigns,settings) where {T}
+    function CUDSSDirectLDLSolver{T}(KKT::SparseMatrixCSC{T,Int64},Dsigns,settings) where {T}
 
         dim = LinearAlgebra.checksquare(KKT)
 
         #make a logical factorization to fix memory allocations
         # "S" denotes real symmetric and 'U' denotes the upper triangular
-        KKTgpu = CuSparseMatrixCSR(KKT)
-        cudssSolver = CUDSS.CudssSolver(KKTgpu, "S", 'U')
-        x = CudssMatrix(T, n)
-        b = CudssMatrix(T, n)
+        colptr = CuVector(KKT.colptr)
+        rowval = CuVector(KKT.rowval)
+        nzval = CuVector(KKT.nzval)
+        KKTgpu = CUSPARSE.CuSparseMatrixCSR(colptr, rowval, nzval, (dim, dim))
+        cudssSolver = CUDSS.CudssSolver(KKTgpu, "S", 'L')
+        x = CuVector(zeros(T, dim))
+        b = CuVector(zeros(T, dim))
+
+        cudss("analysis", cudssSolver, x, b)
+        cudss("factorization", cudssSolver, x, b)
 
         return new(KKTgpu,cudssSolver,x,b)
     end
@@ -37,7 +44,7 @@ function update_values!(
 ) where{T}
 
     #Update values that are stored within KKTgpu
-    @views ldlsolver.KKTgpu.nzVal[index] .= values
+    @views ldlsolver.KKTgpu.nzVal[CuVector(index)] .= CuVector(values)
 
 end
 
@@ -58,7 +65,10 @@ end
 function refactor!(ldlsolver::CUDSSDirectLDLSolver{T}, K::SparseMatrixCSC) where{T}
 
     # Update the KKT matrix in the cudss solver
-    cudss_set(ldlsolver.cudssSolver,ldlsolver.KKTgpu)
+    cudss_set(ldlsolver.cudssSolver.matrix,ldlsolver.KKTgpu)
+
+    # Refactorization
+    cudss("factorization", ldlsolver.cudssSolver, ldlsolver.x, ldlsolver.b)
 
     # YC: should be corrected later on 
     return true
@@ -77,12 +87,12 @@ function solve!(
     #solve in place 
     xgpu = ldlsolver.x
     bgpu = ldlsolver.b
-    @. bgpu = b
+    copyto!(bgpu,b)
     
     #solve on GPU
     ldiv!(xgpu,ldlsolver.cudssSolver,bgpu)
 
     #copy back to CPU
-    @. x = xgpu
+    copyto!(x,xgpu)
 
 end
