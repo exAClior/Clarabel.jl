@@ -15,9 +15,11 @@ mutable struct DirectLDLKKTSolver{T} <: AbstractKKTSolver{T}
     # and static offsetting of KKT
     work1::Vector{T}
     work2::Vector{T}
+    work1_gpu::AbstractVector{T}
+    work2_gpu::AbstractVector{T}
 
     #KKT mapping from problem data to KKT
-    map::LDLDataMap
+    map::Union{LDLDataMap,IndirectDataMap}
 
     #the expected signs of D in KKT = LDL^T
     Dsigns::Vector{Int}
@@ -30,7 +32,7 @@ mutable struct DirectLDLKKTSolver{T} <: AbstractKKTSolver{T}
     KKT::SparseMatrixCSC{T,Int}
 
     #symmetric view for residual calcs
-    KKTsym::Symmetric{T, SparseMatrixCSC{T,Int}}
+    KKTsym::Union{Symmetric{T, SparseMatrixCSC{T,Int}},AbstractSparseMatrix{T}}
 
     #settings just points back to the main solver settings.
     #Required since there is no separate LDL settings container
@@ -50,7 +52,11 @@ mutable struct DirectLDLKKTSolver{T} <: AbstractKKTSolver{T}
         (kktshape, ldlsolverT) = _get_ldlsolver_config(settings)
 
         #construct a KKT matrix of the right shape
-        KKT, map = _assemble_kkt_matrix(P,A,cones,kktshape)
+        if (kktshape === :full)
+            KKT, map = _assemble_full_kkt_matrix(P,A,cones,kktshape)
+        else
+            KKT, map = _assemble_kkt_matrix(P,A,cones,kktshape)
+        end
 
         #Need this many extra variables for sparse cones
         p = pdim(map.sparse_maps)
@@ -58,8 +64,10 @@ mutable struct DirectLDLKKTSolver{T} <: AbstractKKTSolver{T}
         #LHS/RHS/work for iterative refinement
         x    = Vector{T}(undef,n+m+p)
         b    = Vector{T}(undef,n+m+p)
-        work_e  = Vector{T}(undef,n+m+p)
-        work_dx = Vector{T}(undef,n+m+p)
+        diag_kkt  = Vector{T}(undef,n+m+p)
+        diag_shift = Vector{T}(undef,n+m+p)
+        work_e  = CuVector{T}(undef,n+m+p)
+        work_dx = CuVector{T}(undef,n+m+p)
 
         #the expected signs of D in LDL
         Dsigns = Vector{Int}(undef,n+m+p)     
@@ -73,12 +81,14 @@ mutable struct DirectLDLKKTSolver{T} <: AbstractKKTSolver{T}
 
         #KKT will be triu data only, but we will want
         #the following to allow products like KKT*x
-        KKTsym = Symmetric(KKT)
 
         #the LDL linear solver engine
         ldlsolver = ldlsolverT{T}(KKT,Dsigns,settings)
 
-        return new(m,n,p,x,b,
+        #YC: only ":full" type on GPU
+        KKTsym = (kktshape === :full) ? ldlsolver.KKTgpu : Symmetric(KKT)
+
+        return new(m,n,p,x,b,diag_kkt,diag_shift,
                    work_e,work_dx,map,Dsigns,Hsblocks,
                    KKT,KKTsym,settings,ldlsolver,
                    diagonal_regularizer)
@@ -343,7 +353,10 @@ function kktsolver_solve!(
     lhsz::Union{Nothing,AbstractVector{T}}
 ) where {T}
 
-    (x,b) = (kktsolver.x,kktsolver.b)
+    #YC: copy values to GPU
+    copyto!(kktsolver.ldlsolver.b,kktsolver.b)
+
+    (x,b) = (kktsolver.ldlsolver.x,kktsolver.ldlsolver.b)
     solve!(kktsolver.ldlsolver,x,b)
 
     is_success = begin
@@ -355,6 +368,9 @@ function kktsolver_solve!(
             is_success = all(isfinite,x)
         end
     end
+
+    #YC: copy values back to CPU
+    copyto!(kktsolver.x,kktsolver.ldlsolver.x)
 
     if is_success
        kktsolver_getlhs!(kktsolver,lhsx,lhsz)
@@ -368,8 +384,8 @@ function  _iterative_refinement(
     ldlsolver::AbstractDirectLDLSolver{T}
 ) where{T}
 
-    (x,b)   = (kktsolver.x,kktsolver.b)
-    (e,dx)  = (kktsolver.work1, kktsolver.work2)
+    (x,b)   = (kktsolver.ldlsolver.x,kktsolver.ldlsolver.b)
+    (e,dx)  = (kktsolver.work1_gpu, kktsolver.work2_gpu)
     settings = kktsolver.settings
 
     #iterative refinement params
@@ -387,7 +403,7 @@ function  _iterative_refinement(
     isfinite(norme) || return is_success = false 
 
     for i = 1:IR_maxiter
-
+        println("Error is: ", norme)
         if(norme <= IR_abstol + IR_reltol*normb)
             # within tolerance, or failed.  Exit
             break
@@ -418,8 +434,7 @@ function  _iterative_refinement(
     # make sure kktsolver fields now point to the right place
     # following possible swaps.   This is not necessary in the
     # Rust implementation since implementation there is via borrow
-    (kktsolver.x,kktsolver.work2) = (x,dx)
- 
+    (kktsolver.ldlsolver.x,kktsolver.work2) = (x,dx)
     #NB: "success" means only that we had a finite valued result
     return is_success = true
 end
@@ -431,12 +446,13 @@ end
 function _get_refine_error!(
     e::AbstractVector{T},
     b::AbstractVector{T},
-    KKTsym::Symmetric{T},
+    KKTsym::Union{Symmetric{T},AbstractSparseMatrix{T}},
     ξ::AbstractVector{T}) where {T}
 
-    @. e = b
-    mul!(e,KKTsym,ξ,-1.,1.)   # e = b - Kξ
-
+    
+    # mul!(e,KKTsym,ξ,-1.,1.)   # e = b - Kξ
+    mul!(e,KKTsym,ξ)
+    @. e = b - e
     return norm(e,Inf)
 
 end

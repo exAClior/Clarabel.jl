@@ -2,7 +2,7 @@ using CUDA, CUDA.CUSPARSE
 using CUDSS
 
 export CUDSSDirectLDLSolver
-struct CUDSSDirectLDLSolver{T} <: AbstractDirectLDLSolver{T}
+mutable struct CUDSSDirectLDLSolver{T} <: AbstractDirectLDLSolver{T}
 
     KKTgpu::AbstractSparseMatrix{T}
     cudssSolver::CUDSS.CudssSolver{T}
@@ -19,8 +19,13 @@ struct CUDSSDirectLDLSolver{T} <: AbstractDirectLDLSolver{T}
         colptr = CuVector(KKT.colptr)
         rowval = CuVector(KKT.rowval)
         nzval = CuVector(KKT.nzval)
+
         KKTgpu = CUSPARSE.CuSparseMatrixCSR(colptr, rowval, nzval, (dim, dim))
-        cudssSolver = CUDSS.CudssSolver(KKTgpu, "S", 'L')
+        cudssSolver = CUDSS.CudssSolver(KKTgpu, "S", 'F')
+
+        # #YC: change the settings
+        # cudss_set(cudssSolver, "ir_n_steps", settings.iterative_refinement_max_iter)
+
         x = CuVector(zeros(T, dim))
         b = CuVector(zeros(T, dim))
 
@@ -33,7 +38,7 @@ struct CUDSSDirectLDLSolver{T} <: AbstractDirectLDLSolver{T}
 end
 
 DirectLDLSolversDict[:cudss] = CUDSSDirectLDLSolver
-required_matrix_shape(::Type{CUDSSDirectLDLSolver}) = :triu
+required_matrix_shape(::Type{CUDSSDirectLDLSolver}) = :full
 
 #update entries in the KKT matrix using the
 #given index into its CSC representation
@@ -80,19 +85,12 @@ end
 #solve the linear system
 function solve!(
     ldlsolver::CUDSSDirectLDLSolver{T},
-    x::Vector{T},
-    b::Vector{T}
+    x::AbstractVector{T},
+    b::AbstractVector{T}
 ) where{T}
-
-    #solve in place 
-    xgpu = ldlsolver.x
-    bgpu = ldlsolver.b
-    copyto!(bgpu,b)
     
     #solve on GPU
-    ldiv!(xgpu,ldlsolver.cudssSolver,bgpu)
+    ldiv!(x,ldlsolver.cudssSolver,b)
 
-    #copy back to CPU
-    copyto!(x,xgpu)
 
 end
