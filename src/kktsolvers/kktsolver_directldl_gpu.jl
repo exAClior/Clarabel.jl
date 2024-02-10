@@ -25,9 +25,12 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
     #KKT mapping from problem data to KKT
     map::IndirectDataMap 
+    diag_full_gpu::AbstractVector{Int}
+    diagP_gpu::AbstractVector{Int}
 
     #the expected signs of D in KKT = LDL^T
     Dsigns::Vector{Int}
+    Dsignsgpu::AbstractVector{Int}
 
     # a vector for storing the Hs blocks
     # on the in the KKT matrix block diagonal
@@ -57,6 +60,8 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         #construct a KKT matrix of the right shape
         KKTcpu, map = _assemble_full_kkt_matrix(P,A,cones,kktshape)
         KKTgpu = CuSparseMatrixCSR(KKTcpu)
+        diag_full_gpu = CuVector(map.diag_full)
+        diagP_gpu = CuVector(map.diagP)
 
         #Need this many extra variables for sparse cones
         p = pdim(map.sparse_maps)
@@ -74,6 +79,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         #the expected signs of D in LDL
         Dsigns = Vector{Int}(undef,n+m+p)
         _fill_Dsigns!(Dsigns,m,n,map)
+        Dsignsgpu = CuVector(Dsigns)
 
         #updates to the diagonal of KKT will be
         #assigned here before updating matrix entries
@@ -87,7 +93,9 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         GPUsolver = GPUsolverT{T}(KKTgpu,A,settings)
 
         return new(m,n,p,xcpu,bcpu,xgpu,bgpu,
-                   work1cpu,work2cpu,work1gpu,work2gpu,map,Dsigns,Hsblocks,cones,
+                   work1cpu,work2cpu,work1gpu,work2gpu,map,diag_full_gpu,diagP_gpu,
+                   Dsigns,Dsignsgpu,
+                   Hsblocks,cones,
                    KKTcpu,KKTgpu,settings,GPUsolver,
                    diagonal_regularizer
                    )
@@ -129,8 +137,33 @@ function _update_values!(
 
     #YC: should tailored when using GPU
     #Update values in the KKT matrix K
+    @. KKT.nzVal[index] = values
+
+end
+
+function _update_values!(
+    GPUsolver::AbstractGPUSolver{T},
+    KKT::SparseMatrixCSC{T},
+    index::Vector{Ti},
+    values::Vector{T}
+) where{T,Ti}
+
+    #YC: should tailored when using GPU
+    #Update values in the KKT matrix K
     @. KKT.nzval[index] = values
 
+end
+
+#updates KKT matrix values
+function _update_values_KKT!(
+    KKT::AbstractCuSparseMatrix{T},
+    index::AbstractVector{Ti},
+    values::AbstractVector{T}
+) where{T,Ti}
+
+    #Update values in the KKT matrix K
+    @. KKT.nzVal[index] = values
+    
 end
 
 
@@ -209,36 +242,39 @@ function _kktsolver_regularize_and_refactor!(
 
     settings      = kktsolver.settings
     map           = kktsolver.map
+    diag_full_gpu = kktsolver.diag_full_gpu
     KKTcpu        = kktsolver.KKTcpu
     KKTgpu        = kktsolver.KKTgpu
-    Dsigns        = kktsolver.Dsigns
-    diag_kkt      = kktsolver.work1cpu
-    diag_shifted  = kktsolver.work2cpu
+    Dsigns        = kktsolver.Dsignsgpu
+    diag_kkt      = kktsolver.work1gpu
+    diag_shifted  = kktsolver.work2gpu
+
+    #YC: Update to KKTgpu
+    copyto!(KKTgpu.nzVal,KKTcpu.nzval)
 
     if(settings.static_regularization_enable)
 
         # hold a copy of the true KKT diagonal
-        @views diag_kkt .= KKTcpu.nzval[map.diag_full]
+        @views diag_kkt .= KKTgpu.nzVal[diag_full_gpu]
         ϵ = _compute_regularizer(diag_kkt, settings)
 
         # compute an offset version, accounting for signs
         diag_shifted .= diag_kkt
-        @inbounds for i in eachindex(Dsigns)
-            if(Dsigns[i] == 1) diag_shifted[i] += ϵ
-            else               diag_shifted[i] -= ϵ
-            end
-        end
+        # @inbounds for i in eachindex(Dsigns)
+        #     if(Dsigns[i] == 1) diag_shifted[i] += ϵ
+        #     else               diag_shifted[i] -= ϵ
+        #     end
+        # end
+        diag_shifted .+= Dsigns*ϵ
+
         # overwrite the diagonal of KKT and within the  GPUsolver
-        _update_values!(GPUsolver,KKTcpu,map.diag_full,diag_shifted)
+        _update_values!(GPUsolver,KKTgpu,diag_full_gpu,diag_shifted)
 
         # remember the value we used.  Not needed,
         # but possibly useful for debugging
         kktsolver.diagonal_regularizer = ϵ
 
     end
-
-    #YC: Update to KKTgpu
-    copyto!(KKTgpu.nzVal,KKTcpu.nzval)
 
     is_success = refactor!(GPUsolver)
 
@@ -248,10 +284,7 @@ function _kktsolver_regularize_and_refactor!(
         # it was. Not necessary to fix the  GPUsolver copy because
         # this is only needed for our post-factorization IR scheme
 
-        _update_values_KKT!(KKTcpu,map.diag_full,diag_kkt)
-
-        #YC: Update to KKTgpu
-        copyto!(KKTgpu.nzVal,KKTcpu.nzval)
+        _update_values_KKT!(KKTgpu,diag_full_gpu,diag_kkt)
 
     end
 
