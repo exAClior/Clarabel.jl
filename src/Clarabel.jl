@@ -56,6 +56,10 @@ module Clarabel
     include("./kktsolvers/kktsolver_indirect.jl")
     include("./kktsolvers/indirect/preconditioner/includes.jl")
 
+    #GPU ldl methods
+    include("./kktsolvers/gpu/includes.jl")
+    include("./kktsolvers/kktsolver_directldl_gpu.jl")
+
     # printing and top level solver
     include("./info_print.jl")
     include("./solver.jl")
