@@ -43,14 +43,14 @@ module Clarabel
 
     #direct LDL linear solve methods
     include("./kktsolvers/direct-ldl/includes.jl")
+    # Indirect linear solve methods
+    include("./kktsolvers/indirect/includes.jl")
 
     #KKT solvers and solver level kktsystem
     include("./kktsolvers/kktsolver_defaults.jl")
     include("./kktsolvers/kktsolver_directldl.jl")
-    include("./kktsystem.jl")
 
-    # Indirect linear solve methods
-    include("./kktsolvers/indirect/includes.jl")
+    include("./kktsystem.jl")
 
     # Indirect KKT solver
     include("./kktsolvers/kktsolver_indirect.jl")
