@@ -2,6 +2,7 @@
 # KKTSolver using indirect solvers
 # -------------------------------------
 
+const CuVectorView{T} = SubArray{T, 1, AbstractVector{T}, Tuple{AbstractVector{Int}}, false}
 ##############################################################
 # YC: Some functions are repeated as in the direct solver, which are better to be removed
 ##############################################################
@@ -155,14 +156,14 @@ function _update_values!(
 end
 
 #updates KKT matrix values
-function _update_values_KKT!(
+function _update_diag_values_KKT!(
     KKT::AbstractCuSparseMatrix{T},
     index::AbstractVector{Ti},
     values::AbstractVector{T}
 ) where{T,Ti}
 
     #Update values in the KKT matrix K
-    @. KKT.nzVal[index] = values
+    @views copyto!(KKT.nzVal[index], values)
     
 end
 
@@ -284,7 +285,7 @@ function _kktsolver_regularize_and_refactor!(
         # it was. Not necessary to fix the  GPUsolver copy because
         # this is only needed for our post-factorization IR scheme
 
-        _update_values_KKT!(KKTgpu,diag_full_gpu,diag_kkt)
+        _update_diag_values_KKT!(KKTgpu,diag_full_gpu,diag_kkt)
 
     end
 
