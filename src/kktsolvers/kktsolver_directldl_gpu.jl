@@ -1,5 +1,5 @@
 # -------------------------------------
-# KKTSolver using indirect solvers
+# KKTSolver using cudss direct solvers
 # -------------------------------------
 
 const CuVectorView{T} = SubArray{T, 1, AbstractVector{T}, Tuple{AbstractVector{Int}}, false}
@@ -19,23 +19,20 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
     # internal workspace for IR scheme
     # and static offsetting of KKT
-    work1cpu::Vector{T}
-    work2cpu::Vector{T}
-    work1gpu::AbstractVector{T}
-    work2gpu::AbstractVector{T}
+    work1::AbstractVector{T}
+    work2::AbstractVector{T}
 
     #KKT mapping from problem data to KKT
-    map::IndirectDataMap 
-    diag_full_gpu::AbstractVector{Int}
-    diagP_gpu::AbstractVector{Int}
+    mapcpu::IndirectDataMap
+    mapgpu::GPUDataMap 
 
     #the expected signs of D in KKT = LDL^T
-    Dsigns::Vector{Int}
-    Dsignsgpu::AbstractVector{Int}
+    Dsigns::AbstractVector{Int}
 
     # a vector for storing the Hs blocks
     # on the in the KKT matrix block diagonal
-    Hsblocks::Vector{Vector{T}}
+    Hsblockscpu::ConicHsblocks{T}
+    Hsblocksgpu::HsblocksGPU{T}
     cones::CompositeCone{T}
 
     #unpermuted KKT matrix
@@ -59,34 +56,42 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         (kktshape, GPUsolverT) = _get_GPUsolver_config(settings)
 
         #construct a KKT matrix of the right shape
-        KKTcpu, map = _assemble_full_kkt_matrix(P,A,cones,kktshape)
+        KKTcpu, mapcpu = _assemble_full_kkt_matrix(P,A,cones,kktshape)
         KKTgpu = CuSparseMatrixCSR(KKTcpu)
-        diag_full_gpu = CuVector(map.diag_full)
-        diagP_gpu = CuVector(map.diagP)
 
+        #YC: update GPU map, should be removed later on
+        mapgpu   = GPUDataMap(P,A,cones)
+        copyto!(mapgpu.P,mapcpu.P)
+        copyto!(mapgpu.A,mapcpu.A)
+        copyto!(mapgpu.At,mapcpu.At)
+        copyto!(mapgpu.Hsblocks.data,mapcpu.Hsblocks.vec)
+        copyto!(mapgpu.diagP,mapcpu.diagP)
+        copyto!(mapgpu.diag_full,mapcpu.diag_full)
+
+        #YC: disabled sparse expansion
         #Need this many extra variables for sparse cones
-        p = pdim(map.sparse_maps)
-
-        #LHS/RHS/work for iterative refinement
-        xcpu    = Vector{T}(undef,n+m+p)
-        bcpu    = Vector{T}(undef,n+m+p)
-        xgpu    = CuVector{T}(undef,n+m+p)
-        bgpu    = CuVector{T}(undef,n+m+p)
-        work1cpu  = Vector{T}(undef,n+m+p)
-        work2cpu = Vector{T}(undef,n+m+p)
-        work1gpu = CuVector{T}(undef,n+m+p)
-        work2gpu = CuVector{T}(undef,n+m+p)
-
-        #the expected signs of D in LDL
-        Dsigns = Vector{Int}(undef,n+m+p)
-        _fill_Dsigns!(Dsigns,m,n,map)
-        Dsignsgpu = CuVector(Dsigns)
+        # p = pdim(map.sparse_maps)
+        p = 0
 
         #updates to the diagonal of KKT will be
         #assigned here before updating matrix entries
         dim = m + n + p
 
-        Hsblocks = _allocate_full_kkt_Hsblocks(T, cones)
+        #LHS/RHS/work for iterative refinement
+        xcpu    = Vector{T}(undef,dim)
+        bcpu    = Vector{T}(undef,dim)
+        xgpu    = CuVector{T}(undef,dim)
+        bgpu    = CuVector{T}(undef,dim)
+        work1 = CuVector{T}(undef,dim)
+        work2 = CuVector{T}(undef,dim)
+
+        #the expected signs of D in LDL
+        Dsigns_cpu = Vector{Int}(undef,dim)
+        _fill_Dsigns!(Dsigns_cpu,m,n,mapcpu)       #This is run on CPU
+        Dsigns = CuVector(Dsigns_cpu)
+
+        Hsblockscpu = _allocate_full_kkt_Hsblocks(T, cones)
+        Hsblocksgpu = _allocate_full_kkt_Hsblocks_gpu(T, cones, Hsblockscpu)
 
         diagonal_regularizer = zero(T)
 
@@ -94,9 +99,9 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         GPUsolver = GPUsolverT{T}(KKTgpu,A,settings)
 
         return new(m,n,p,xcpu,bcpu,xgpu,bgpu,
-                   work1cpu,work2cpu,work1gpu,work2gpu,map,diag_full_gpu,diagP_gpu,
-                   Dsigns,Dsignsgpu,
-                   Hsblocks,cones,
+                   work1,work2,mapcpu,mapgpu,
+                   Dsigns,
+                   Hsblockscpu,Hsblocksgpu,cones,
                    KKTcpu,KKTgpu,settings,GPUsolver,
                    diagonal_regularizer
                    )
@@ -142,9 +147,9 @@ function _update_values!(
 
 end
 
-function _update_values!(
+function cpu_update_values!(
     GPUsolver::AbstractGPUSolver{T},
-    KKT::SparseMatrixCSC{T},
+    KKT::AbstractSparseMatrix{T},
     index::Vector{Ti},
     values::Vector{T}
 ) where{T,Ti}
@@ -207,30 +212,33 @@ function _kktsolver_update_inner!(
     #real implementation is here, and now  GPUsolver
     #will be compiled to something concrete.
 
-    map       = kktsolver.map
-    KKTcpu       = kktsolver.KKTcpu
+    map       = kktsolver.mapgpu
+    KKT       = kktsolver.KKTgpu
 
     #Set the elements the W^tW blocks in the KKT matrix.
-    get_Hs!(cones,kktsolver.Hsblocks,false)
+    get_Hs!(cones,kktsolver.Hsblockscpu,false)
 
-    for (index, values) in zip(map.Hsblocks,kktsolver.Hsblocks)
-        #change signs to get -W^TW
-        @. values *= -one(T)
-        _update_values!(GPUsolver,KKTcpu,index,values)
-    end
+    #YC: copy updated values from CPU to GPU
+    #This copy is extremely slow and should be optimized later
+    #Note that we can change mapcpu.Hsblocks to ConicVector type
+    copyto!(kktsolver.Hsblocksgpu.data,kktsolver.Hsblockscpu.vec)
 
-    sparse_map_iter = Iterators.Stateful(map.sparse_maps)
+    @. kktsolver.Hsblocksgpu.data *= -one(T)
+    _update_values!(GPUsolver,KKT,map.Hsblocks.data,kktsolver.Hsblocksgpu.data)
 
-    updateFcn = (index,values) -> _update_values!(GPUsolver,KKTcpu,index,values)
-    scaleFcn  = (index,scale)  -> _scale_values!(GPUsolver,KKTcpu,index,scale)
+    #YC: disabled sparse expansion
+    # sparse_map_iter = Iterators.Stateful(map.sparse_maps)
 
-    for cone in cones
-        #add sparse expansions columns for sparse cones 
-        if @conedispatch is_sparse_expandable(cone)
-            thismap = popfirst!(sparse_map_iter)
-            _csc_update_sparsecone_full(cone,thismap,updateFcn,scaleFcn)
-        end 
-    end
+    # updateFcn = (index,values) -> _update_values!(GPUsolver,KKTcpu,index,values)
+    # scaleFcn  = (index,scale)  -> _scale_values!(GPUsolver,KKTcpu,index,scale)
+
+    # for cone in cones
+    #     #add sparse expansions columns for sparse cones 
+    #     if @conedispatch is_sparse_expandable(cone)
+    #         thismap = popfirst!(sparse_map_iter)
+    #         _csc_update_sparsecone_full(cone,thismap,updateFcn,scaleFcn)
+    #     end 
+    # end
 
     return _kktsolver_regularize_and_refactor!(kktsolver, GPUsolver)
 
@@ -242,34 +250,26 @@ function _kktsolver_regularize_and_refactor!(
 ) where{T}
 
     settings      = kktsolver.settings
-    map           = kktsolver.map
-    diag_full_gpu = kktsolver.diag_full_gpu
-    KKTcpu        = kktsolver.KKTcpu
+    map           = kktsolver.mapgpu
     KKTgpu        = kktsolver.KKTgpu
-    Dsigns        = kktsolver.Dsignsgpu
-    diag_kkt      = kktsolver.work1gpu
-    diag_shifted  = kktsolver.work2gpu
+    Dsigns        = kktsolver.Dsigns
+    diag_kkt      = kktsolver.work1
+    diag_shifted  = kktsolver.work2
 
-    #YC: Update to KKTgpu
-    copyto!(KKTgpu.nzVal,KKTcpu.nzval)
 
     if(settings.static_regularization_enable)
 
         # hold a copy of the true KKT diagonal
-        @views diag_kkt .= KKTgpu.nzVal[diag_full_gpu]
+        @views diag_kkt .= KKTgpu.nzVal[map.diag_full]
         ϵ = _compute_regularizer(diag_kkt, settings)
 
         # compute an offset version, accounting for signs
         diag_shifted .= diag_kkt
-        # @inbounds for i in eachindex(Dsigns)
-        #     if(Dsigns[i] == 1) diag_shifted[i] += ϵ
-        #     else               diag_shifted[i] -= ϵ
-        #     end
-        # end
+
         diag_shifted .+= Dsigns*ϵ
 
         # overwrite the diagonal of KKT and within the  GPUsolver
-        _update_values!(GPUsolver,KKTgpu,diag_full_gpu,diag_shifted)
+        _update_values!(GPUsolver,KKTgpu,map.diag_full,diag_shifted)
 
         # remember the value we used.  Not needed,
         # but possibly useful for debugging
@@ -285,7 +285,7 @@ function _kktsolver_regularize_and_refactor!(
         # it was. Not necessary to fix the  GPUsolver copy because
         # this is only needed for our post-factorization IR scheme
 
-        _update_diag_values_KKT!(KKTgpu,diag_full_gpu,diag_kkt)
+        _update_diag_values_KKT!(KKTgpu,map.diag_full,diag_kkt)
 
     end
 
@@ -385,7 +385,7 @@ function  _iterative_refinement(
 ) where{T}
 
     (x,b)   = (kktsolver.xgpu,kktsolver.bgpu)
-    (e,dx)  = (kktsolver.work1gpu, kktsolver.work2gpu)
+    (e,dx)  = (kktsolver.work1, kktsolver.work2)
     settings = kktsolver.settings
 
     #iterative refinement params
@@ -434,7 +434,7 @@ function  _iterative_refinement(
     # make sure kktsolver fields now point to the right place
     # following possible swaps.   This is not necessary in the
     # Rust implementation since implementation there is via borrow
-    (kktsolver.xgpu,kktsolver.work2gpu) = (x,dx)
+    (kktsolver.xgpu,kktsolver.work2) = (x,dx)
  
     #NB: "success" means only that we had a finite valued result
     return is_success = true

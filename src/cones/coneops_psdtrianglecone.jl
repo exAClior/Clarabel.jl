@@ -168,10 +168,10 @@ end
 function get_Hs!(
     K::PSDTriangleCone{T},
     Hsblock::AbstractVector{T},
-    directsolver::Bool
+    is_triangular::Bool
 ) where {T}
 
-    directsolver ? pack_triu(Hsblock,K.data.Hs) : pack_all(Hsblock,K.data.Hs)
+    is_triangular ? pack_triu(Hsblock,K.data.Hs) : pack_all(Hsblock,K.data.Hs)
 
     return nothing
 end

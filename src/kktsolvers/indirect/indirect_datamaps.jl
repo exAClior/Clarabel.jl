@@ -188,7 +188,7 @@ struct IndirectDataMap
     P::Vector{Int}
     A::Vector{Int}
     At::Vector{Int}        #YC: not sure whether we need it or not
-    Hsblocks::Vector{Vector{Int}}                #indices of the lower RHS blocks (by cone)
+    Hsblocks::ConicHsblocks{Int}                #indices of the lower RHS blocks (by cone)
     sparse_maps::Vector{SparseExpansionFullMap}      #sparse cone expansion terms
 
     #all of above terms should be disjoint and their union

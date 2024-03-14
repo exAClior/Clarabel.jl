@@ -97,3 +97,115 @@ LinearAlgebra.mul!(
 
 LinearAlgebra.norm(x::ConicVector{T}) where {T} = norm(x.vec)
 LinearAlgebra.norm(x::ConicVector{T},p::Real) where {T} = norm(x.vec,p)
+
+
+#struct similar to ConicVector for easy data transfer when updating the KKT matrix
+struct ConicHsblocks{T<:Real} <: AbstractVector{T}
+
+    #contiguous array of source data
+    vec::Vector{T}
+
+    #array of data views of type Vector{T}
+    views::Vector{VectorView{T}}
+
+    function ConicHsblocks{T}(S::CompositeCone,is_triangular::Bool) where {T}
+
+        #undef initialization would possibly result
+        #in Infs or NaNs, causing failure in gemv!
+        #style vector updates
+
+        dim = 0
+        for (i, cone) in enumerate(S)
+            nvars = numel(cone)
+            if Hs_is_diagonal(cone) 
+                numelblock = nvars
+            else
+                if is_triangular
+                    numelblock = triangular_number(nvars)   #triangular form
+                else
+                    numelblock = nvars*nvars 
+                end
+            end
+            dim += numelblock
+        end
+
+        vec   = zeros(T,dim)
+        views = Vector{VectorView{T}}(undef, length(S))
+
+        # loop over the sets and create views
+        last = 0
+        for (i, cone) in enumerate(S)
+            nvars = numel(cone)
+            if Hs_is_diagonal(cone) 
+                numelblock = nvars
+            else 
+                if is_triangular
+                    numelblock = triangular_number(nvars)   #triangular form
+                else
+                    numelblock = nvars*nvars 
+                end
+            end
+
+            first  = last + 1
+            last   = last + numelblock
+            views[i] = view(vec, first:last)
+        end
+
+        return new(vec, views)
+
+    end
+
+end
+
+ConicHsblocks(args...) = ConicHsblocks{DefaultFloat}(args...)
+ConicHsblocks(args...) = ConicHsblocks{Integer}(args...)
+
+@inline function Base.getindex(s::ConicHsblocks{T},i) where{T}
+    @boundscheck checkbounds(s.vec,i)
+    @inbounds s.vec[i]
+end
+@inline function Base.setindex!(s::ConicHsblocks{T},v,i) where{T}
+    @boundscheck checkbounds(s.vec,i)
+    @inbounds s.vec[i] = T(v)
+end
+
+Base.adjoint(s::ConicHsblocks{T}) where{T} = adjoint(s.vec)
+Base.iterate(s::ConicHsblocks{T}) where{T} = iterate(s.vec)
+Base.eltype(s::ConicHsblocks{T}) where{T} = eltype(s.vec)
+Base.elsize(s::ConicHsblocks{T}) where{T} = Base.elsize(s.vec)
+Base.size(s::ConicHsblocks{T}) where{T} = size(s.vec)
+Base.length(s::ConicHsblocks{T}) where{T} = length(s.vec)
+Base.IndexStyle(s::ConicHsblocks{T}) where{T} = IndexStyle(s.vec)
+
+#For maximum speed, it seems we need to explicitly define
+#a bunch of functions that use the vec field directly, which
+#will force calls to the BLAS specialized methods when possible
+#Alternatively, we could subtype DenseArray{T}, but that
+#seems less general and still fails to capture high
+#performance sparse matrix vector multiply
+
+
+#need this if we want to make calls directly to the BLAS functions
+Base.unsafe_convert(::Type{Ptr{T}}, s::ConicHsblocks{T}) where {T} =
+           Base.unsafe_convert(Ptr{T}, s.vec)
+
+#mul!
+LinearAlgebra.mul!(
+    C::ConicHsblocks,
+    A::AbstractVecOrMat,
+    B::AbstractVector, α::Number, β::Number) = mul!(C.vec, A, B, α, β)
+
+LinearAlgebra.mul!(
+    C::AbstractVector,
+    A::AbstractVecOrMat,
+    B::ConicHsblocks, α::Number, β::Number) = mul!(C, A, B.vec, α, β)
+
+LinearAlgebra.mul!(
+    C::ConicHsblocks,
+    A::Adjoint{<:Any, <:AbstractVecOrMat},
+    B::AbstractVector, α::Number, β::Number) = mul!(C.vec, A, B, α, β)
+
+LinearAlgebra.mul!(
+    C::AbstractVector,
+    A::Adjoint{<:Any, <:AbstractVecOrMat},
+    B::ConicHsblocks, α::Number, β::Number) = mul!(C, A, B.vec, α, β)

@@ -297,7 +297,7 @@ function update_preconditioner!(
     @views HinvCpu.nzval[1:n] .= zero(T)   #Preallocate values equal to 0
 
     ind = n
-    for Hsi in Hsblocks
+    for Hsi in Hsblocks.views
         len = length(Hsi)
         @views HinvCpu.nzval[ind+1:ind+len] .= -one(T).*Hsi       #YC: reverse the sign change back
         ind += len
@@ -309,7 +309,7 @@ function update_preconditioner!(
 
     #Compute the inverse matrix H^{-1} explicitly
     ind = n
-    for (cone,Hsi) in zip(cones,Hsblocks)
+    for (cone,Hsi) in zip(cones,Hsblocks.views)
         len = length(Hsi)
         if (Hs_is_diagonal(cone))
             @. @views HinvCpu.nzval[ind+1:ind+len] = inv(HinvCpu.nzval[ind+1:ind+len])

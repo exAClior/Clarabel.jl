@@ -92,11 +92,11 @@ end
 function get_Hs!(
     K::ExponentialCone{T},
     Hsblock::AbstractVector{T},
-    directsolver::Bool
+    is_triangular::Bool
 ) where {T}
 
     # stores triu(K.Hs) into a vector
-    directsolver ? pack_triu(Hsblock,K.Hs) : pack_all(Hsblock,K.Hs) 
+    is_triangular ? pack_triu(Hsblock,K.Hs) : pack_all(Hsblock,K.Hs) 
 
 end
 

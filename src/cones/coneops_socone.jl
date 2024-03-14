@@ -156,7 +156,7 @@ end
 function get_Hs!(
     K::SecondOrderCone{T},
     Hsblock::AbstractVector{T},
-    directsolver::Bool
+    is_triangular::Bool
 ) where {T}
 
     if is_sparse_expandable(K)
@@ -172,7 +172,7 @@ function get_Hs!(
         #for dense form, we return H = \eta^2 (2*ww^T - J), where 
         #J = diag(1,-I).  We are packing into dense triu form
 
-        if directsolver
+        if is_triangular
             #YC: we are assuming data is upper triangular, should also consider the lower triangular case
             Hsblock[1] = 2*K.w[1]^2 - one(T)
             hidx = 2

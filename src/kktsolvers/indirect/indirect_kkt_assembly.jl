@@ -2,18 +2,7 @@ using SparseArrays, StaticArrays
 
 function _allocate_full_kkt_Hsblocks(type::Type{T}, cones) where{T <: Real}
 
-    ncones    = length(cones)
-    Hsblocks = Vector{Vector{T}}(undef,ncones)
-
-    for (i, cone) in enumerate(cones)
-        nvars = numel(cone)
-        if Hs_is_diagonal(cone) 
-            numelblock = nvars
-        else #dense triangle
-            numelblock = nvars*nvars #must be Int
-        end
-        Hsblocks[i] = Vector{T}(undef,numelblock)
-    end
+    Hsblocks = ConicHsblocks{T}(cones,false)
 
     return Hsblocks
 end
@@ -34,7 +23,7 @@ function _assemble_full_kkt_matrix(
     nnz_diagP  = _count_diagonal_entries(P)
 
     # total entries in the Hs blocks
-    nnz_Hsblocks = mapreduce(length, +, map.Hsblocks; init = 0)
+    nnz_Hsblocks = length(map.Hsblocks)
 
     nnzKKT = (nnz(P) +      # Number of elements in P
     n -                     # Number of elements in diagonal top left block
@@ -129,9 +118,9 @@ function _full_kkt_assemble_fill(
         blockdim = numel(cone)
 
         if Hs_is_diagonal(cone)
-            _csc_fill_diag(K,map.Hsblocks[i],row,blockdim)
+            _csc_fill_diag(K,map.Hsblocks.views[i],row,blockdim)
         else
-            _csc_fill_dense_full(K,map.Hsblocks[i],row,blockdim)
+            _csc_fill_dense_full(K,map.Hsblocks.views[i],row,blockdim)
         end
 
         #add sparse expansions columns for sparse cones 

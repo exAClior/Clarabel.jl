@@ -91,7 +91,7 @@ end
 function get_Hs!(
     K::GenPowerCone{T},
     Hsblock::AbstractVector{T},
-    directsolver::Bool
+    is_triangular::Bool
 ) where {T}
 
     #NB: we are returning here the diagonal D = [d1; d2] block from the

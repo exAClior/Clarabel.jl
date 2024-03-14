@@ -24,7 +24,7 @@ mutable struct DirectLDLKKTSolver{T} <: AbstractKKTSolver{T}
 
     # a vector for storing the Hs blocks
     # on the in the KKT matrix block diagonal
-    Hsblocks::Vector{Vector{T}}
+    Hsblocks::ConicHsblocks{T}
 
     #unpermuted KKT matrix
     KKT::SparseMatrixCSC{T,Int}
@@ -216,11 +216,9 @@ function _kktsolver_update_inner!(
     #Set the elements the W^tW blocks in the KKT matrix.
     get_Hs!(cones,kktsolver.Hsblocks,true)
 
-    for (index, values) in zip(map.Hsblocks,kktsolver.Hsblocks)
-        #change signs to get -W^TW
-        @. values *= -one(T)
-        _update_values!(ldlsolver,KKT,index,values)
-    end
+    #change signs to get -W^TW
+    @. kktsolver.Hsblocks *= -one(T)
+    _update_values!(ldlsolver,KKT,map.Hsblocks.vec,kktsolver.Hsblocks.vec)
 
     sparse_map_iter = Iterators.Stateful(map.sparse_maps)
 

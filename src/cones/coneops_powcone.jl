@@ -94,11 +94,11 @@ end
 function get_Hs!(
     K::PowerCone{T},
     Hsblock::AbstractVector{T},
-    directsolver::Bool
+    is_triangular::Bool
 ) where {T}
 
     #Vectorize triu(K.μH)
-    directsolver ? pack_triu(Hsblock,K.Hs) : pack_all(Hsblock,K.Hs)
+    is_triangular ? pack_triu(Hsblock,K.Hs) : pack_all(Hsblock,K.Hs)
 
 end
 

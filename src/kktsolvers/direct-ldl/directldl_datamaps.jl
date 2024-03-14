@@ -171,7 +171,7 @@ struct LDLDataMap
 
     P::Vector{Int}
     A::Vector{Int}
-    Hsblocks::Vector{Vector{Int}}                #indices of the lower RHS blocks (by cone)
+    Hsblocks::ConicHsblocks{Int}                #indices of the lower RHS blocks (by cone)
     sparse_maps::Vector{SparseExpansionMap}      #sparse cone expansion terms
 
     #all of above terms should be disjoint and their union
