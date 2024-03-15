@@ -157,9 +157,6 @@ struct ConicHsblocks{T<:Real} <: AbstractVector{T}
 
 end
 
-ConicHsblocks(args...) = ConicHsblocks{DefaultFloat}(args...)
-ConicHsblocks(args...) = ConicHsblocks{Integer}(args...)
-
 @inline function Base.getindex(s::ConicHsblocks{T},i) where{T}
     @boundscheck checkbounds(s.vec,i)
     @inbounds s.vec[i]
