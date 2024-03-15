@@ -94,10 +94,16 @@ function update_scaling!(
     (S,Z) = (f.workmat1,f.workmat2)
     map((M,v)->_svec_to_mat!(M,v),(S,Z),(s,z))
 
-    #compute Cholesky factors
-    f.cholS = cholesky!(S, check = true)
-    f.cholZ = cholesky!(Z, check = true)
-    (L1,L2) = (f.cholS.L,f.cholZ.L)
+    #compute Cholesky factors (PG: this is allocating)
+    f.chol1 = cholesky!(S, check = false)
+    f.chol2 = cholesky!(Z, check = false)
+
+    # bail if the cholesky factorization fails
+    if !(issuccess(f.chol1) && issuccess(f.chol2))
+        return is_scaling_success = false
+    end
+
+    (L1,L2) = (f.chol1.L,f.chol2.L)
 
     #SVD of L2'*L1,
     tmp = f.workmat1;
@@ -278,14 +284,30 @@ function compute_barrier(
     α::T
 ) where {T}
 
-    # We should return this, but in a smarter way.
-    # This is not yet implemented, but would only 
-    # be required for problems mixing PSD and 
-    # asymmetric cones 
-    # 
-    # return -log(det(s)) - log(det(z))
+    barrier  = zero(T)
+    barrier -= _logdet_barrier(K,z,dz,α)
+    barrier -= _logdet_barrier(K,s,ds,α)
+    return barrier 
 
-    error("Mixed PSD and Exponential/Power cones are not yet supported")
+end
+
+function _logdet_barrier(K::PSDTriangleCone{T},x::AbstractVector{T},dx::AbstractVector{T},alpha::T) where {T}
+
+    f = K.data
+    Q = f.workmat1
+    q = f.workvec 
+
+    @. q  = x + alpha*dx
+    _svec_to_mat!(Q,q)
+
+    # PG: this is allocating
+    f.chol1 = cholesky!(Q, check = false)
+
+    if issuccess(f.chol1) 
+        return logdet(f.chol1)
+    else 
+        return typemax(T)
+    end 
 
 end
 
