@@ -358,3 +358,22 @@ function _count_diagonal_entries(P)
     return count
 
 end
+
+function _count_diagonal_entries_full(P)
+
+    count = 0
+    for i = 1:P.n
+
+        #compare last entry in each column with
+        #its row number to identify diagonal entries
+        if (P.colptr[i+1] != P.colptr[i])  #nonempty column
+            for j = P.colptr[i]:P.colptr[i+1] -1
+                if (P.rowval[j] == i) 
+                    count += 1
+                end
+            end
+        end
+    end
+    return count
+
+end

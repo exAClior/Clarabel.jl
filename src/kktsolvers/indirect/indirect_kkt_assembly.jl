@@ -20,7 +20,7 @@ function _assemble_full_kkt_matrix(
     p     = pdim(map.sparse_maps)
 
     #entries actually on the diagonal of P
-    nnz_diagP  = _count_diagonal_entries(P)
+    nnz_diagP  = _count_diagonal_entries_full(P)
 
     # total entries in the Hs blocks
     nnz_Hsblocks = length(map.Hsblocks)

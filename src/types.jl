@@ -177,7 +177,7 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
 
         #take an internal copy of all problem
         #data, since we are going to scale it
-        P = (!(settings.direct_kkt_solver) || settings.direct_solve_method != :cudss) ? SparseMatrixCSC(Symmetric(triu(P))) : triu(P);
+        P = (!(settings.direct_kkt_solver) || settings.direct_solve_method == :cudss) ? SparseMatrixCSC(Symmetric(triu(P))) : triu(P);
         q = deepcopy(q)
 
         (A,b) = let  
