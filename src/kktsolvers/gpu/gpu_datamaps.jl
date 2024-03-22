@@ -198,21 +198,22 @@ struct GPUDataMap
     diagP::AbstractVector{Int}
     diag_full::AbstractVector{Int}
 
-    function GPUDataMap(Pmat::SparseMatrixCSC{T},Amat::SparseMatrixCSC{T},cones) where{T}
+    function GPUDataMap(Pmat::SparseMatrixCSC{T},Amat::SparseMatrixCSC{T},cones,mapcpu::IndirectDataMap) where{T}
 
         (m,n) = (size(Amat,1), size(Pmat,1))
-        P = CUDA.zeros(Int,nnz(Pmat))
-        A = CUDA.zeros(Int,nnz(Amat))
-        At = CUDA.zeros(Int,nnz(Amat))
+        P = isempty(mapcpu.P) ? CUDA.zeros(Int,0) : unsafe_wrap(CuArray,mapcpu.P)
+        A = isempty(mapcpu.A) ? CUDA.zeros(Int,0) : unsafe_wrap(CuArray,mapcpu.A)
+        At = isempty(mapcpu.At) ? CUDA.zeros(Int,0) : unsafe_wrap(CuArray,mapcpu.At)
 
         #the diagonal of the ULHS block P.
         #NB : we fill in structural zeros here even if the matrix
         #P is empty (e.g. as in an LP), so we can have entries in
         #index Pdiag that are not present in the index P
-        diagP  = CUDA.zeros(Int,n)
+        diagP  = unsafe_wrap(CuArray,mapcpu.diagP)
 
         #make an index for each of the Hs blocks for each cone
-        Hsblocks = HsblocksGPU{Int}(cones)
+        Hsvec = unsafe_wrap(CuArray,mapcpu.Hsblocks.vec)
+        Hsblocks = HsblocksGPU{Int}(cones,Hsvec)
 
         #YC: disable sparse cone expansion at present
         # #now do the sparse cone expansion pieces
@@ -227,7 +228,7 @@ struct GPUDataMap
         # end
 
         # diag_full = zeros(Int,m+n+pdim(sparse_maps))
-        diag_full = zeros(Int,m+n)
+        diag_full = unsafe_wrap(CuArray,mapcpu.diag_full)
 
         return new(P,A,At,Hsblocks,diagP,diag_full)
     end

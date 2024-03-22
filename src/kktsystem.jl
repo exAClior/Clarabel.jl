@@ -23,7 +23,8 @@ mutable struct DefaultKKTSystem{T} <: AbstractKKTSystem{T}
         function DefaultKKTSystem{T}(
             data::DefaultProblemData{T},
             cones::CompositeCone{T},
-            settings::Settings{T}
+            settings::Settings{T},
+            timer::TimerOutput
         ) where {T}
 
         #basic problem dimensions

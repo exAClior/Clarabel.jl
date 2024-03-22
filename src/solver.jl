@@ -110,7 +110,7 @@ function setup!(
         end
 
         @timeit s.timers "kkt init" begin
-            s.kktsystem = DefaultKKTSystem{T}(s.data,s.cones,s.settings)
+            s.kktsystem = DefaultKKTSystem{T}(s.data,s.cones,s.settings,s.timers)
         end
 
         # work variables for assembling step direction LHS/RHS
@@ -200,11 +200,11 @@ function solve!(
 
             #update the residuals
             #--------------
-            residuals_update!(s.residuals,s.variables,s.data)
+            @timeit s.timers "residual update" residuals_update!(s.residuals,s.variables,s.data)
 
             #calculate duality gap (scaled)
             #--------------
-            μ = variables_calc_mu(s.variables, s.residuals, s.cones)
+            @timeit s.timers "update μ" μ = variables_calc_mu(s.variables, s.residuals, s.cones)
 
             # record scalar values from most recent iteration.
             # This captures μ at iteration zero.  
@@ -231,7 +231,7 @@ function solve!(
             
             #update the scalings
             #--------------
-            is_scaling_success = variables_scale_cones!(s.variables,s.cones,μ,scaling)
+            @timeit s.timers "update scaling" is_scaling_success = variables_scale_cones!(s.variables,s.cones,μ,scaling)
             # check whether variables are interior points
             (action,scaling) = _strategy_checkpoint_is_scaling_success(s,is_scaling_success,scaling)
             if action === Fail;  break;
@@ -254,7 +254,7 @@ function solve!(
 
             #calculate the affine step
             #--------------
-            variables_affine_step_rhs!(
+            @timeit s.timers "update affine step" variables_affine_step_rhs!(
                 s.step_rhs, s.residuals,
                 s.variables, s.cones
             )
@@ -272,7 +272,7 @@ function solve!(
 
                 #calculate step length and centering parameter
                 #--------------
-                α = solver_get_step_length(s,:affine,scaling)
+                @timeit s.timers "find step 1" α = solver_get_step_length(s,:affine,scaling)
                 σ = _calc_centering_parameter(α)
 
                 #make a reduced Mehrotra correction in the first iteration
@@ -281,7 +281,7 @@ function solve!(
 
                 #calculate the combined step and length
                 #--------------
-                variables_combined_step_rhs!(
+                @timeit s.timers "update combined step" variables_combined_step_rhs!(
                     s.step_rhs, s.residuals,
                     s.variables, s.cones,
                     s.step_lhs, σ, μ, m
@@ -307,7 +307,7 @@ function solve!(
 
             #compute final step length and update the current iterate
             #--------------
-            α = solver_get_step_length(s,:combined,scaling)
+            @timeit s.timers "find step 2" α = solver_get_step_length(s,:combined,scaling)
 
             # check for undersized step and update strategy
             (action,scaling) = _strategy_checkpoint_small_step(s, α, scaling)
@@ -319,7 +319,7 @@ function solve!(
             # Copy previous iterate in case the next one is a dud
             info_save_prev_iterate(s.info,s.variables,s.prev_vars)
 
-            variables_add_step!(s.variables,s.step_lhs,α)
+            @timeit s.timers "final update" variables_add_step!(s.variables,s.step_lhs,α)
 
         end  #end while
         #----------

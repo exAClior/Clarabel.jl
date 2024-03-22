@@ -13,7 +13,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
     # Left and right hand sides for solves
     xcpu::Vector{T}
-    bcpu::Vector{T}
+    bcpu::AbstractVector{T}
     xgpu::AbstractVector{T}
     bgpu::AbstractVector{T}
 
@@ -60,13 +60,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         KKTgpu = CuSparseMatrixCSR(KKTcpu)
 
         #YC: update GPU map, should be removed later on
-        mapgpu   = GPUDataMap(P,A,cones)
-        copyto!(mapgpu.P,mapcpu.P)
-        copyto!(mapgpu.A,mapcpu.A)
-        copyto!(mapgpu.At,mapcpu.At)
-        copyto!(mapgpu.Hsblocks.data,mapcpu.Hsblocks.vec)
-        copyto!(mapgpu.diagP,mapcpu.diagP)
-        copyto!(mapgpu.diag_full,mapcpu.diag_full)
+        mapgpu   = GPUDataMap(P,A,cones,mapcpu)
 
         #YC: disabled sparse expansion
         #Need this many extra variables for sparse cones
@@ -78,10 +72,10 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         dim = m + n + p
 
         #LHS/RHS/work for iterative refinement
-        xcpu    = Vector{T}(undef,dim)
-        bcpu    = Vector{T}(undef,dim)
-        xgpu    = CuVector{T}(undef,dim)
-        bgpu    = CuVector{T}(undef,dim)
+        xgpu    = CuVector{T,Mem.Unified}(undef,dim)
+        bgpu    = CuVector{T,Mem.Unified}(undef,dim)
+        xcpu    = unsafe_wrap(Array,xgpu)
+        bcpu    = unsafe_wrap(Array,bgpu)
         work1 = CuVector{T}(undef,dim)
         work2 = CuVector{T}(undef,dim)
 
@@ -218,11 +212,6 @@ function _kktsolver_update_inner!(
     #Set the elements the W^tW blocks in the KKT matrix.
     get_Hs!(cones,kktsolver.Hsblockscpu,false)
 
-    #YC: copy updated values from CPU to GPU
-    #This copy is extremely slow and should be optimized later
-    #Note that we can change mapcpu.Hsblocks to ConicVector type
-    copyto!(kktsolver.Hsblocksgpu.data,kktsolver.Hsblockscpu.vec)
-
     @. kktsolver.Hsblocksgpu.data *= -one(T)
     _update_values!(GPUsolver,KKT,map.Hsblocks.data,kktsolver.Hsblocksgpu.data)
 
@@ -269,7 +258,7 @@ function _kktsolver_regularize_and_refactor!(
         diag_shifted .+= Dsigns*ϵ
 
         # overwrite the diagonal of KKT and within the  GPUsolver
-        _update_values!(GPUsolver,KKTgpu,map.diag_full,diag_shifted)
+        _update_diag_values_KKT!(KKTgpu,map.diag_full,diag_shifted)
 
         # remember the value we used.  Not needed,
         # but possibly useful for debugging
@@ -351,7 +340,6 @@ function kktsolver_solve!(
     (xgpu,bgpu) = (kktsolver.xgpu,kktsolver.bgpu)
 
     #YC: copy rhs from CPU to GPU
-    copyto!(bgpu,kktsolver.bcpu)
     solve!(kktsolver.GPUsolver,xgpu,bgpu)
 
     is_success = begin
@@ -363,9 +351,6 @@ function kktsolver_solve!(
             is_success = all(isfinite,xgpu)
         end
     end
-
-    #YC: copy back to CPU 
-    copyto!(kktsolver.xcpu,kktsolver.xgpu)
 
     if is_success
        kktsolver_getlhs!(kktsolver,lhsx,lhsz)

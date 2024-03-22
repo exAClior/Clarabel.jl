@@ -8,7 +8,7 @@ struct HsblocksGPU{T} <: AbstractHsblocksStruct{T}
     data::AbstractArray{T,1}
     views::AbstractArray{Int,2}
 
-    function HsblocksGPU{T}(cones) where {T}
+    function HsblocksGPU{T}(cones,data::AbstractArray{T,1}) where {T}
         ncones = length(cones)
         ind = 0
         
@@ -26,17 +26,14 @@ struct HsblocksGPU{T} <: AbstractHsblocksStruct{T}
             CUDA.@allowscalar views[i,2] = ind          #end index of cone i
         end
 
-        data = CUDA.zeros(T, ind)
-
         return new(data, views)
     end
 end
 
 function _allocate_full_kkt_Hsblocks_gpu(type::Type{T}, cones, Hsblockscpu::ConicHsblocks) where{T <: Real}
 
-    Hsblocksgpu = HsblocksGPU{T}(cones)
-
-    copyto!(Hsblocksgpu.data,Hsblockscpu.vec)
+    Hsvec = unsafe_wrap(CuArray,Hsblockscpu.vec)
+    Hsblocksgpu = HsblocksGPU{T}(cones,Hsvec)
 
     return Hsblocksgpu
 end
