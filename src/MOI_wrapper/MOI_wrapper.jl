@@ -23,6 +23,7 @@ const OptimizerSupportedMOICones{T} = Union{
 
 #Optimizer will consolidate cones of these types if possible
 const OptimizerMergeableTypes = [Clarabel.ZeroConeT, Clarabel.NonnegativeConeT]
+const OptimizerPriorGPUTypes = [MOI.Zeros, MOI.Nonnegatives]
 
 #mappings between MOI and internal definitions
 
@@ -426,12 +427,38 @@ function MOIU.IndexMap(dest::Optimizer, src::MOI.ModelLike)
         idxmap[vis_src[i]] = MOI.VariableIndex(i)
     end
     i = 0
+    # for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+    #     MOI.supports_constraint(dest, F, S) || throw(MOI.UnsupportedConstraint{F, S}())
+    #     cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+    #     for ci in cis_src
+    #         i += 1
+    #         idxmap[ci] = MOI.ConstraintIndex{F, S}(i)
+    #     end
+    # end
+
     for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
         MOI.supports_constraint(dest, F, S) || throw(MOI.UnsupportedConstraint{F, S}())
         cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
         for ci in cis_src
-            i += 1
-            idxmap[ci] = MOI.ConstraintIndex{F, S}(i)
+            set = MOI.get(src, MOI.ConstraintSet(), ci)
+            #Process zero or nonnegative cones first
+            if typeof(set) ∈ OptimizerPriorGPUTypes
+                i += 1
+                idxmap[ci] = MOI.ConstraintIndex{F, S}(i)
+            end
+        end
+    end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        MOI.supports_constraint(dest, F, S) || throw(MOI.UnsupportedConstraint{F, S}())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci in cis_src
+            set = MOI.get(src, MOI.ConstraintSet(), ci)
+            #Process zero or nonnegative cones first
+            if !(typeof(set) ∈ OptimizerPriorGPUTypes)
+                i += 1
+                idxmap[ci] = MOI.ConstraintIndex{F, S}(i)
+            end
         end
     end
 
@@ -446,14 +473,42 @@ function assign_constraint_row_ranges!(
 )
 
     startrow = 1
+    # for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+    #     cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+    #     for ci_src in cis_src
+    #         set = MOI.get(src, MOI.ConstraintSet(), ci_src)
+    #         ci_dest = idxmap[ci_src]
+    #         endrow = startrow + MOI.dimension(set) - 1
+    #         rowranges[ci_dest.value] = startrow : endrow
+    #         startrow = endrow + 1
+    #     end
+    # end
+
     for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
         cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
         for ci_src in cis_src
             set = MOI.get(src, MOI.ConstraintSet(), ci_src)
-            ci_dest = idxmap[ci_src]
-            endrow = startrow + MOI.dimension(set) - 1
-            rowranges[ci_dest.value] = startrow : endrow
-            startrow = endrow + 1
+            #Process zero or nonnegative cones first
+            if typeof(set) ∈ OptimizerPriorGPUTypes
+                ci_dest = idxmap[ci_src]
+                endrow = startrow + MOI.dimension(set) - 1
+                rowranges[ci_dest.value] = startrow : endrow
+                startrow = endrow + 1
+            end
+        end
+    end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci_src in cis_src
+            set = MOI.get(src, MOI.ConstraintSet(), ci_src)
+            #Process other cones
+            if !(typeof(set) ∈ OptimizerPriorGPUTypes)
+                ci_dest = idxmap[ci_src]
+                endrow = startrow + MOI.dimension(set) - 1
+                rowranges[ci_dest.value] = startrow : endrow
+                startrow = endrow + 1
+            end
         end
     end
 
@@ -505,11 +560,9 @@ function process_constraints(
     #these will be used for the Clarabel API cone types
     cone_spec = Clarabel.SupportedCone[]
 
-    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
-        push_constraint!(
+    push_constraint!(
             (I, J, V), b, cone_spec,
-            src, idxmap, rowranges, F, S)
-    end
+            src, idxmap, rowranges)
 
     #we have built Ax + b \in Cone, but we actually
     #want to pose the problem as Ax + s = b, s\ in Cone
@@ -528,21 +581,51 @@ function push_constraint!(
     cone_spec::Vector{Clarabel.SupportedCone},
     src::MOI.ModelLike,
     idxmap,
-    rowranges::Dict{Int, UnitRange{Int}},
-    F::Type{<:MOI.AbstractFunction},
-    S::Type{<:MOI.AbstractSet}
+    rowranges::Dict{Int, UnitRange{Int}}
 ) where {T}
 
-    cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
-    for ci in cis_src
-        s = MOI.get(src, MOI.ConstraintSet(), ci)
-        f = MOI.get(src, MOI.ConstraintFunction(), ci)
-        rows = constraint_rows(rowranges, idxmap[ci])
-        push_constraint_constant!(b, rows, f, s)
-        push_constraint_linear!(triplet, f, rows, idxmap, s)
-        push_constraint_set!(cone_spec, rows, s)
+    # for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+    #     cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+    #     for ci in cis_src
+    #         s = MOI.get(src, MOI.ConstraintSet(), ci)
+    #         f = MOI.get(src, MOI.ConstraintFunction(), ci)
+    #         rows = constraint_rows(rowranges, idxmap[ci])
+    #         push_constraint_constant!(b, rows, f, s)
+    #         push_constraint_linear!(triplet, f, rows, idxmap, s)
+    #         push_constraint_set!(cone_spec, rows, s)
+    #     end
+    # end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci in cis_src
+            s = MOI.get(src, MOI.ConstraintSet(), ci)
+            f = MOI.get(src, MOI.ConstraintFunction(), ci)
+            #Zero and nonnegative cones
+            if typeof(s) ∈ OptimizerPriorGPUTypes
+                rows = constraint_rows(rowranges, idxmap[ci])
+                push_constraint_constant!(b, rows, f, s)
+                push_constraint_linear!(triplet, f, rows, idxmap, s)
+                push_constraint_set!(cone_spec, rows, s)
+            end
+        end
     end
 
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci in cis_src
+            s = MOI.get(src, MOI.ConstraintSet(), ci)
+            f = MOI.get(src, MOI.ConstraintFunction(), ci)
+            #Other cones
+            if !(typeof(s) ∈ OptimizerPriorGPUTypes)
+                rows = constraint_rows(rowranges, idxmap[ci])
+                push_constraint_constant!(b, rows, f, s)
+                push_constraint_linear!(triplet, f, rows, idxmap, s)
+                push_constraint_set!(cone_spec, rows, s)
+            end
+        end
+    end
+    
     return nothing
 end
 
