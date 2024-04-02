@@ -16,7 +16,7 @@ function info_print_configuration(
     info::DefaultInfo{T},
     settings::Settings{T},
     data::DefaultProblemData{T},
-    cones::CompositeCone{T}
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}}
 ) where {T}
 
     if(settings.verbose == false) return end
@@ -183,7 +183,7 @@ get_precision_string(T::Type{<:Real}) = string(T)
 get_precision_string(T::Type{<:BigFloat}) = string(T," (", precision(T), " bit)")
 
 
-function print_conedims_by_type(io::IO, cones::CompositeCone{T}, type::Type) where {T}
+function print_conedims_by_type(io::IO, cones::Union{CompositeCone{T},CompositeConeGPU{T}}, type::Type) where {T}
 
     maxlistlen = 5
 

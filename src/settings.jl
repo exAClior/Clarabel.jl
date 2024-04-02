@@ -119,7 +119,7 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     iterative_refinement_reltol::T      = 1e-12      
     iterative_refinement_abstol::T      = 1e-12 
 
-    iterative_refinement_max_iter::Int  = 10         # YC:Set it to 0; disable IR but ensure we add the regularization to the system
+    iterative_refinement_max_iter::Int  = 10         
     iterative_refinement_stop_ratio::T  = 5     
     
     #preprocessing 

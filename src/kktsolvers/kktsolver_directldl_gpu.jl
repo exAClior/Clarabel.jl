@@ -12,10 +12,8 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
     m::Int; n::Int; p::Int
 
     # Left and right hand sides for solves
-    xcpu::Vector{T}
-    bcpu::AbstractVector{T}
-    xgpu::AbstractVector{T}
-    bgpu::AbstractVector{T}
+    x::AbstractVector{T}
+    b::AbstractVector{T}
 
     # internal workspace for IR scheme
     # and static offsetting of KKT
@@ -31,9 +29,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
     # a vector for storing the Hs blocks
     # on the in the KKT matrix block diagonal
-    Hsblockscpu::ConicHsblocks{T}
-    Hsblocksgpu::HsblocksGPU{T}
-    cones::CompositeCone{T}
+    Hsblocks::AbstractVector{T}
 
     #unpermuted KKT matrix
     KKTcpu::SparseMatrixCSC{T,Int}
@@ -64,18 +60,18 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
         #YC: disabled sparse expansion
         #Need this many extra variables for sparse cones
-        # p = pdim(map.sparse_maps)
-        p = 0
+        p = pdim(mapcpu.sparse_maps)
+        if p > 0 
+            error("We don't support the augmented sparse cone at the moment!")
+        end
 
         #updates to the diagonal of KKT will be
         #assigned here before updating matrix entries
         dim = m + n + p
 
         #LHS/RHS/work for iterative refinement
-        xgpu    = CuVector{T,Mem.Unified}(undef,dim)
-        bgpu    = CuVector{T,Mem.Unified}(undef,dim)
-        xcpu    = unsafe_wrap(Array,xgpu)
-        bcpu    = unsafe_wrap(Array,bgpu)
+        x    = CuVector{T}(undef,dim)
+        b    = CuVector{T}(undef,dim)
         work1 = CuVector{T}(undef,dim)
         work2 = CuVector{T}(undef,dim)
 
@@ -85,17 +81,17 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         Dsigns = CuVector(Dsigns_cpu)
 
         Hsblockscpu = _allocate_full_kkt_Hsblocks(T, cones)
-        Hsblocksgpu = _allocate_full_kkt_Hsblocks_gpu(T, cones, Hsblockscpu)
+        Hsblocks = CuVector(Hsblockscpu.vec)
 
         diagonal_regularizer = zero(T)
 
         #the indirect linear solver engine
         GPUsolver = GPUsolverT{T}(KKTgpu,A,settings)
 
-        return new(m,n,p,xcpu,bcpu,xgpu,bgpu,
+        return new(m,n,p,x,b,
                    work1,work2,mapcpu,mapgpu,
                    Dsigns,
-                   Hsblockscpu,Hsblocksgpu,cones,
+                   Hsblocks,
                    KKTcpu,KKTgpu,settings,GPUsolver,
                    diagonal_regularizer
                    )
@@ -135,22 +131,8 @@ function _update_values!(
     values::AbstractVector{T}
 ) where{T,Ti}
 
-    #YC: should tailored when using GPU
     #Update values in the KKT matrix K
     @. KKT.nzVal[index] = values
-
-end
-
-function cpu_update_values!(
-    GPUsolver::AbstractGPUSolver{T},
-    KKT::AbstractSparseMatrix{T},
-    index::Vector{Ti},
-    values::Vector{T}
-) where{T,Ti}
-
-    #YC: should tailored when using GPU
-    #Update values in the KKT matrix K
-    @. KKT.nzval[index] = values
 
 end
 
@@ -167,25 +149,24 @@ function _update_diag_values_KKT!(
 end
 
 
-#scale entries in the kktsolver object using the
-#given index into its CSC representation
-function _scale_values!(
-    GPUsolver::AbstractGPUSolver{T},
-    KKT::SparseMatrixCSC{T,Ti},
-    index::AbstractVector{Ti},
-    scale::T
-) where{T,Ti}
+# #scale entries in the kktsolver object using the
+# #given index into its CSC representation
+# function _scale_values!(
+#     GPUsolver::AbstractGPUSolver{T},
+#     KKT::SparseMatrixCSC{T,Ti},
+#     index::AbstractVector{Ti},
+#     scale::T
+# ) where{T,Ti}
 
-    #YC: should tailored when using GPU
-    #Update values in the KKT matrix K
-    @. KKT.nzval[index] *= scale
+#     #Update values in the KKT matrix K
+#     @. KKT.nzval[index] *= scale
 
-end
+# end
 
 
 function kktsolver_update!(
     kktsolver:: GPULDLKKTSolver{T},
-    cones::CompositeCone{T}
+    cones::CompositeConeGPU{T}
 ) where {T}
 
     # the internal  GPUsolver is type unstable, so multiple
@@ -200,7 +181,7 @@ end
 function _kktsolver_update_inner!(
     kktsolver:: GPULDLKKTSolver{T},
     GPUsolver::AbstractGPUSolver{T},
-    cones::CompositeCone{T}
+    cones::CompositeConeGPU{T}
 ) where {T}
 
     #real implementation is here, and now  GPUsolver
@@ -210,10 +191,11 @@ function _kktsolver_update_inner!(
     KKT       = kktsolver.KKTgpu
 
     #Set the elements the W^tW blocks in the KKT matrix.
-    get_Hs!(cones,kktsolver.Hsblockscpu,false)
+    # get_Hs!(cones,kktsolver.Hsblockscpu,false)
+    get_Hs!(cones,kktsolver.Hsblocks)
 
-    @. kktsolver.Hsblocksgpu.data *= -one(T)
-    _update_values!(GPUsolver,KKT,map.Hsblocks.data,kktsolver.Hsblocksgpu.data)
+    @. kktsolver.Hsblocks *= -one(T)
+    _update_values!(GPUsolver,KKT,map.Hsblocks,kktsolver.Hsblocks)
 
     #YC: disabled sparse expansion
     # sparse_map_iter = Iterators.Stateful(map.sparse_maps)
@@ -304,12 +286,14 @@ function kktsolver_setrhs!(
     rhsz::AbstractVector{T}
 ) where {T}
 
-    b = kktsolver.bcpu
+    b = kktsolver.b
     (m,n,p) = (kktsolver.m,kktsolver.n,kktsolver.p)
 
     b[1:n]             .= rhsx
     b[(n+1):(n+m)]     .= rhsz
     b[(n+m+1):(n+m+p)] .= 0
+    
+    CUDA.synchronize()
 
     return nothing
 end
@@ -321,11 +305,13 @@ function kktsolver_getlhs!(
     lhsz::Union{Nothing,AbstractVector{T}}
 ) where {T}
 
-    x = kktsolver.xcpu
+    x = kktsolver.x
     (m,n) = (kktsolver.m,kktsolver.n)
 
     isnothing(lhsx) || (@views lhsx .= x[1:n])
     isnothing(lhsz) || (@views lhsz .= x[(n+1):(n+m)])
+
+    CUDA.synchronize()
 
     return nothing
 end
@@ -337,10 +323,9 @@ function kktsolver_solve!(
     lhsz::Union{Nothing,AbstractVector{T}}
 ) where {T}
 
-    (xgpu,bgpu) = (kktsolver.xgpu,kktsolver.bgpu)
+    (x,b) = (kktsolver.x,kktsolver.b)
 
-    #YC: copy rhs from CPU to GPU
-    solve!(kktsolver.GPUsolver,xgpu,bgpu)
+    solve!(kktsolver.GPUsolver,x,b)
 
     is_success = begin
         if(kktsolver.settings.iterative_refinement_enable)
@@ -348,7 +333,7 @@ function kktsolver_solve!(
             is_success = _iterative_refinement(kktsolver,kktsolver.GPUsolver)
         else
              # otherwise must directly verify finite values
-            is_success = all(isfinite,xgpu)
+            is_success = all(isfinite,x)
         end
     end
 
@@ -359,17 +344,12 @@ function kktsolver_solve!(
     return is_success
 end
 
-# YC: need an efficient refinement as the indirect solver doesn't factorize
-#     a system but repeat the multiplication iteratively
-
-#   Moreover, warm-start for the iterative refinement is also an issue
-
 function  _iterative_refinement(
     kktsolver::GPULDLKKTSolver{T},
     GPUsolver::AbstractGPUSolver{T}
 ) where{T}
 
-    (x,b)   = (kktsolver.xgpu,kktsolver.bgpu)
+    (x,b)   = (kktsolver.x,kktsolver.b)
     (e,dx)  = (kktsolver.work1, kktsolver.work2)
     settings = kktsolver.settings
 
@@ -386,8 +366,6 @@ function  _iterative_refinement(
     norme = _get_refine_error!(e,b,KKT,x)
     isfinite(norme) || return is_success = false
 
-    # println("error is: ", norme)
-
     for i = 1:IR_maxiter
 
         if(norme <= IR_abstol + IR_reltol*normb)
@@ -402,6 +380,7 @@ function  _iterative_refinement(
         #prospective solution is x + dx.   Use dx space to
         #hold it for a check before applying to x
         @. dx += x
+        CUDA.synchronize()
         norme = _get_refine_error!(e,b,KKT,dx)
         isfinite(norme) || return is_success = false
 
@@ -419,7 +398,7 @@ function  _iterative_refinement(
     # make sure kktsolver fields now point to the right place
     # following possible swaps.   This is not necessary in the
     # Rust implementation since implementation there is via borrow
-    (kktsolver.xgpu,kktsolver.work2) = (x,dx)
+    (kktsolver.x,kktsolver.work2) = (x,dx)
  
     #NB: "success" means only that we had a finite valued result
     return is_success = true
@@ -438,7 +417,7 @@ function _get_refine_error!(
     
     mul!(e,KKT,ξ)    # e = b - Kξ
     @. e = b - e
-
+    CUDA.synchronize()
     norme = norm(e,Inf)
 
     return norme

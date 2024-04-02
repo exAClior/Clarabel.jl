@@ -454,8 +454,34 @@ function MOIU.IndexMap(dest::Optimizer, src::MOI.ModelLike)
         cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
         for ci in cis_src
             set = MOI.get(src, MOI.ConstraintSet(), ci)
-            #Process zero or nonnegative cones first
-            if !(typeof(set) ∈ OptimizerPriorGPUTypes)
+            #Process second-order cones
+            if typeof(set) == MOI.SecondOrderCone
+                i += 1
+                idxmap[ci] = MOI.ConstraintIndex{F, S}(i)
+            end
+        end
+    end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        MOI.supports_constraint(dest, F, S) || throw(MOI.UnsupportedConstraint{F, S}())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci in cis_src
+            set = MOI.get(src, MOI.ConstraintSet(), ci)
+            #Process exponential cones
+            if typeof(set) == MOI.ExponentialCone
+                i += 1
+                idxmap[ci] = MOI.ConstraintIndex{F, S}(i)
+            end
+        end
+    end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        MOI.supports_constraint(dest, F, S) || throw(MOI.UnsupportedConstraint{F, S}())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci in cis_src
+            set = MOI.get(src, MOI.ConstraintSet(), ci)
+            #Process power cones
+            if typeof(set) <: MOI.PowerCone
                 i += 1
                 idxmap[ci] = MOI.ConstraintIndex{F, S}(i)
             end
@@ -503,7 +529,35 @@ function assign_constraint_row_ranges!(
         for ci_src in cis_src
             set = MOI.get(src, MOI.ConstraintSet(), ci_src)
             #Process other cones
-            if !(typeof(set) ∈ OptimizerPriorGPUTypes)
+            if typeof(set) == MOI.SecondOrderCone
+                ci_dest = idxmap[ci_src]
+                endrow = startrow + MOI.dimension(set) - 1
+                rowranges[ci_dest.value] = startrow : endrow
+                startrow = endrow + 1
+            end
+        end
+    end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci_src in cis_src
+            set = MOI.get(src, MOI.ConstraintSet(), ci_src)
+            #Process other cones
+            if typeof(set) == MOI.ExponentialCone
+                ci_dest = idxmap[ci_src]
+                endrow = startrow + MOI.dimension(set) - 1
+                rowranges[ci_dest.value] = startrow : endrow
+                startrow = endrow + 1
+            end
+        end
+    end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci_src in cis_src
+            set = MOI.get(src, MOI.ConstraintSet(), ci_src)
+            #Process other cones
+            if typeof(set) <: MOI.PowerCone
                 ci_dest = idxmap[ci_src]
                 endrow = startrow + MOI.dimension(set) - 1
                 rowranges[ci_dest.value] = startrow : endrow
@@ -617,7 +671,7 @@ function push_constraint!(
             s = MOI.get(src, MOI.ConstraintSet(), ci)
             f = MOI.get(src, MOI.ConstraintFunction(), ci)
             #Other cones
-            if !(typeof(s) ∈ OptimizerPriorGPUTypes)
+            if typeof(s) == MOI.SecondOrderCone
                 rows = constraint_rows(rowranges, idxmap[ci])
                 push_constraint_constant!(b, rows, f, s)
                 push_constraint_linear!(triplet, f, rows, idxmap, s)
@@ -625,7 +679,37 @@ function push_constraint!(
             end
         end
     end
-    
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci in cis_src
+            s = MOI.get(src, MOI.ConstraintSet(), ci)
+            f = MOI.get(src, MOI.ConstraintFunction(), ci)
+            #Other cones
+            if typeof(s) == MOI.ExponentialCone
+                rows = constraint_rows(rowranges, idxmap[ci])
+                push_constraint_constant!(b, rows, f, s)
+                push_constraint_linear!(triplet, f, rows, idxmap, s)
+                push_constraint_set!(cone_spec, rows, s)
+            end
+        end
+    end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci in cis_src
+            s = MOI.get(src, MOI.ConstraintSet(), ci)
+            f = MOI.get(src, MOI.ConstraintFunction(), ci)
+            #Other cones
+            if typeof(s) <: MOI.PowerCone
+                rows = constraint_rows(rowranges, idxmap[ci])
+                push_constraint_constant!(b, rows, f, s)
+                push_constraint_linear!(triplet, f, rows, idxmap, s)
+                push_constraint_set!(cone_spec, rows, s)
+            end
+        end
+    end
+
     return nothing
 end
 

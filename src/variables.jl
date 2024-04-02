@@ -2,7 +2,7 @@
 function variables_calc_mu(
     variables::DefaultVariables{T},
     residuals::DefaultResiduals{T},
-    cones::CompositeCone{T}
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}}
 ) where {T}
 
   μ = (residuals.dot_sz + variables.τ * variables.κ)/(cones.degree + 1)
@@ -14,7 +14,7 @@ end
 function variables_calc_step_length(
     variables::DefaultVariables{T},
     step::DefaultVariables{T},
-    cones::CompositeCone{T},
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}},
     settings::Settings{T},
     steptype::Symbol
 ) where {T}
@@ -71,17 +71,21 @@ function variables_barrier(
     return barrier
 end
 
-function variables_copy_from(dest::DefaultVariables{T},src::DefaultVariables{T}) where {T}
+function variables_copy_from(dest::DefaultVariables{T},src::DefaultVariables{T},use_gpu::Bool) where {T}
     dest.x .= src.x
     dest.s .= src.s
     dest.z .= src.z
     dest.τ  = src.τ
     dest.κ  = src.κ
+
+    if use_gpu
+        CUDA.synchronize()
+    end
 end 
 
 function variables_scale_cones!(
     variables::DefaultVariables{T},
-    cones::CompositeCone{T},
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}},
 	μ::T,
     scaling_strategy::ScalingStrategy
 ) where {T}
@@ -91,7 +95,7 @@ end
 
 function variables_add_step!(
     variables::DefaultVariables{T},
-    step::DefaultVariables{T}, α::T
+    step::DefaultVariables{T}, α::T, use_gpu::Bool
 ) where {T}
 
     @. variables.x += α*step.x
@@ -99,6 +103,10 @@ function variables_add_step!(
     @. variables.z += α*step.z
     variables.τ    += α*step.τ
     variables.κ    += α*step.κ
+
+    if use_gpu 
+        CUDA.synchronize()
+    end
 
     return nothing
 end
@@ -108,7 +116,7 @@ function variables_affine_step_rhs!(
     d::DefaultVariables{T},
     r::DefaultResiduals{T},
     variables::DefaultVariables{T},
-    cones::CompositeCone{T}
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}}
 ) where{T}
 
     @. d.x    .=  r.rx
@@ -125,7 +133,7 @@ function variables_combined_step_rhs!(
     d::DefaultVariables{T},
     r::DefaultResiduals{T},
     variables::DefaultVariables{T},
-    cones::CompositeCone{T},
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}},
     step::DefaultVariables{T},
     σ::T,
     μ::T,
@@ -166,7 +174,7 @@ end
 
 function variables_symmetric_initialization!(
     variables::DefaultVariables{T},
-    cones::CompositeCone{T}
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}}
 ) where {T}
 
     _shift_to_cone_interior!(variables.s, cones, PrimalCone::PrimalOrDualCone)
@@ -179,7 +187,7 @@ end
 
 function _shift_to_cone_interior!(
     z::AbstractVector{T},
-    cones::CompositeCone{T},
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}},
     pd::PrimalOrDualCone
 ) where {T}
     
@@ -225,7 +233,7 @@ function variables_unit_initialization!(
     return nothing
 end
 
-function variables_rescale!(variables)
+function variables_rescale!(variables::DefaultVariables)
 
     scale = max(variables.τ,variables.κ)
     invscale = 1/scale;

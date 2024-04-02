@@ -23,20 +23,21 @@ abstract type AbstractSolver{T <: AbstractFloat}   end
 
 mutable struct DefaultVariables{T} <: AbstractVariables{T}
 
-    x::Vector{T}
-    s::ConicVector{T}
-    z::ConicVector{T}
+    x::AbstractVector{T}
+    s::AbstractVector{T}
+    z::AbstractVector{T}
     τ::T
     κ::T
 
     function DefaultVariables{T}(
         n::Integer, 
-        cones::CompositeCone{T}
+        cones::Union{CompositeCone{T},CompositeConeGPU{T}},
+        use_gpu::Bool
     ) where {T}
 
-        x = Vector{T}(undef,n)
-        s = ConicVector{T}(cones)
-        z = ConicVector{T}(cones)
+        x = use_gpu ? CuVector{T}(undef,n) : Vector{T}(undef,n)
+        s = use_gpu ? CuVector{T}(undef,cones.numel) : ConicVector{T}(cones)
+        z = use_gpu ? CuVector{T}(undef,cones.numel) : ConicVector{T}(cones)
         τ = T(1)
         κ = T(1)
 
@@ -63,13 +64,13 @@ end
 mutable struct DefaultResiduals{T} <: AbstractResiduals{T}
 
     #the main KKT residuals
-    rx::Vector{T}
-    rz::Vector{T}
+    rx::AbstractVector{T}
+    rz::AbstractVector{T}
     rτ::T
 
     #partial residuals for infeasibility checks
-    rx_inf::Vector{T}
-    rz_inf::Vector{T}
+    rx_inf::AbstractVector{T}
+    rz_inf::AbstractVector{T}
 
     #various inner products.
     #NB: these are invariant w.r.t equilibration
@@ -79,19 +80,21 @@ mutable struct DefaultResiduals{T} <: AbstractResiduals{T}
     dot_xPx::T
 
     #the product Px by itself. Required for infeasibilty checks
-    Px::Vector{T}
+    Px::AbstractVector{T}
 
     function DefaultResiduals{T}(n::Integer,
-                                 m::Integer) where {T}
+                                 m::Integer,
+                                 use_gpu::Bool) where {T}
 
-        rx = Vector{T}(undef,n)
-        rz = Vector{T}(undef,m)
+        VecType = use_gpu ? CuVector : Vector
+        rx = VecType{T}(undef,n)
+        rz = VecType{T}(undef,m)
         rτ = T(1)
 
-        rx_inf = Vector{T}(undef,n)
-        rz_inf = Vector{T}(undef,m)
+        rx_inf = VecType{T}(undef,n)
+        rz_inf = VecType{T}(undef,m)
 
-        Px = Vector{T}(undef,n)
+        Px = VecType{T}(undef,n)
 
         new(rx,rz,rτ,rx_inf,rz_inf,zero(T),zero(T),zero(T),zero(T),Px)
     end
@@ -118,6 +121,12 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
     #overall scaling for objective function
     c::Base.RefValue{T}
 
+    #GPU data
+    d_gpu::AbstractVector{T}
+    dinv_gpu::AbstractVector{T}
+    e_gpu::AbstractVector{T}
+    einv_gpu::AbstractVector{T}    
+
     function DefaultEquilibration{T}(
         nvars::Int,
         cones::CompositeCone{T},
@@ -131,7 +140,12 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
 
         c    = Ref(T(1.))
 
-        new(d,dinv,e,einv,c)
+        d_gpu = unsafe_wrap(CuArray{T,1},d)
+        dinv_gpu = unsafe_wrap(CuArray{T,1},dinv)
+        e_gpu = unsafe_wrap(CuArray{T,1},e.vec)
+        einv_gpu = unsafe_wrap(CuArray{T,1},einv.vec)
+
+        new(d,dinv,e,einv,c,d_gpu,dinv_gpu,e_gpu,einv_gpu)
     end
 
 end
@@ -161,6 +175,13 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
     normb::Union{T,Nothing}  #unscaled inf norm of b
 
     presolver::Presolver{T}
+
+    #YC: temporary GPU data
+    P_gpu::Union{AbstractMatrix{T},Nothing}
+    q_gpu::Union{AbstractVector{T},Nothing}
+    A_gpu::Union{AbstractMatrix{T},Nothing}
+    At_gpu::Union{AbstractMatrix{T},Nothing}
+    b_gpu::Union{AbstractVector{T},Nothing}
 
     function DefaultProblemData{T}(
         P::AbstractMatrix{T},
@@ -204,7 +225,13 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
         normq = norm(q, Inf)
         normb = norm(b, Inf)
 
-        new(P,q,A,b,n,m,equilibration,normq,normb,presolver)
+        P_gpu = nothing
+        q_gpu = nothing
+        A_gpu = nothing
+        At_gpu = nothing
+        b_gpu = nothing
+
+        new(P,q,A,b,n,m,equilibration,normq,normb,presolver,P_gpu,q_gpu,A_gpu,At_gpu,b_gpu)
 
     end
 
@@ -283,9 +310,9 @@ If the status field indicates that the problem is solved then (x,z,s) are the ca
 If the status indicates either primal or dual infeasibility, then (x,z,s) provide instead an infeasibility certificate.
 """
 mutable struct DefaultSolution{T} <: AbstractSolution{T}
-    x::Vector{T}
-    z::Vector{T}
-    s::Vector{T}
+    x::AbstractVector{T}
+    z::AbstractVector{T}
+    s::AbstractVector{T}
     status::SolverStatus
     obj_val::T
     obj_val_dual::T
@@ -296,11 +323,12 @@ mutable struct DefaultSolution{T} <: AbstractSolution{T}
 
 end
 
-function DefaultSolution{T}(m,n) where {T <: AbstractFloat}
+function DefaultSolution{T}(m,n,use_gpu::Bool) where {T <: AbstractFloat}
 
-    x = Vector{T}(undef,n)
-    z = Vector{T}(undef,m)
-    s = Vector{T}(undef,m)
+    VecType = use_gpu ? CuVector : Vector
+    x = VecType{T}(undef,n)
+    z = VecType{T}(undef,m)
+    s = VecType{T}(undef,m)
 
     # seemingly reasonable defaults
     status  = UNSOLVED
@@ -332,7 +360,7 @@ mutable struct Solver{T <: AbstractFloat} <: AbstractSolver{T}
 
     data::Union{AbstractProblemData{T},Nothing}
     variables::Union{AbstractVariables{T},Nothing}
-    cones::Union{CompositeCone{T},Nothing}
+    cones::Union{CompositeCone{T},CompositeConeGPU{T},Nothing}
     residuals::Union{AbstractResiduals{T},Nothing}
     kktsystem::Union{AbstractKKTSystem{T},Nothing}
     info::Union{AbstractInfo{T},Nothing}
@@ -340,6 +368,7 @@ mutable struct Solver{T <: AbstractFloat} <: AbstractSolver{T}
     step_rhs::Union{AbstractVariables{T},Nothing}
     prev_vars::Union{AbstractVariables{T},Nothing}
     solution::Union{AbstractSolution{T},Nothing}
+    use_gpu::Union{Bool,Nothing}
     settings::Settings{T}
     timers::TimerOutput
 

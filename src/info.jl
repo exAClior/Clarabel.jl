@@ -3,6 +3,7 @@ function info_update!(
     data::DefaultProblemData{T},
     variables::DefaultVariables{T},
     residuals::DefaultResiduals{T},
+    kktsystem::AbstractKKTSystem{T},
     settings::Settings{T},
     timers::TimerOutput
 ) where {T}
@@ -49,6 +50,75 @@ function info_update!(
     #primal and dual relative residuals.  
     info.res_primal  = norm_scaled(einv,residuals.rz) * τinv / max(one(T), normb + normx + norms)
     info.res_dual    = norm_scaled(dinv,residuals.rx) * τinv / max(one(T), normq + normx + normz)
+
+    #absolute and relative gaps
+    info.gap_abs = abs(info.cost_primal - info.cost_dual)
+    info.gap_rel = info.gap_abs / max(one(T),min(abs(info.cost_primal),abs(info.cost_dual)))
+
+    #κ/τ
+    info.ktratio = variables.κ / variables.τ
+
+    #solve time so far (includes setup!)
+    info_get_solve_time!(info,timers)
+
+end
+
+function info_update_gpu!(
+    info::DefaultInfo{T},
+    data::DefaultProblemData{T},
+    variables::DefaultVariables{T},
+    residuals::DefaultResiduals{T},
+    kktsystem::DefaultKKTSystemGPU{T},
+    settings::Settings{T},
+    timers::TimerOutput
+) where {T}
+
+    #work space
+    workx = kktsystem.workx
+    worksz = kktsystem.workz
+
+    #optimality termination check should be computed w.r.t
+    #the pre-homogenization x and z variables.
+    τinv = inv(variables.τ)
+
+    #unscaled linear term norms
+    normb = data_get_normb!(data)
+    normq = data_get_normq!(data)
+
+    #shortcuts for the equilibration matrices
+    dinv_gpu = data.equilibration.dinv_gpu
+    einv_gpu = data.equilibration.einv_gpu
+    cscale = data.equilibration.c[]
+
+    #primal and dual costs. dot products are invariant w.r.t
+    #equilibration, but we still need to back out the overall
+    #objective scaling term c
+    xPx_τinvsq_over2 = residuals.dot_xPx * τinv * τinv / 2;
+    info.cost_primal =  (+residuals.dot_qx*τinv + xPx_τinvsq_over2)/cscale
+    info.cost_dual   =  (-residuals.dot_bz*τinv - xPx_τinvsq_over2)/cscale
+
+    #variables norms, undoing the equilibration.  Do not unscale
+    #by τ yet because the infeasibility residuals are ratios of 
+    #terms that have no affine parts anyway
+    normx = norm_scaled_gpu(dinv_gpu,variables.x,workx)
+    normz = norm_scaled_gpu(einv_gpu,variables.z,worksz)
+    norms = norm_scaled_gpu(einv_gpu,variables.s,worksz)
+
+    #primal and dual infeasibility residuals.   
+    info.res_primal_inf = norm_scaled_gpu(dinv_gpu,residuals.rx_inf,workx) / max(one(T), normz)
+    info.res_dual_inf   = max(
+        norm_scaled_gpu(dinv_gpu,residuals.Px,workx) / max(one(T), normx),
+        norm_scaled_gpu(einv_gpu,residuals.rz_inf,worksz) / max(one(T), normx + norms)
+    )
+
+    #now back out the τ scaling so we can normalize the unscaled primal / dual errors 
+    normx *= τinv
+    normz *= τinv
+    norms *= τinv
+
+    #primal and dual relative residuals.  
+    info.res_primal  = norm_scaled_gpu(einv_gpu,residuals.rz,worksz) * τinv / max(one(T), normb + normx + norms)
+    info.res_dual    = norm_scaled_gpu(dinv_gpu,residuals.rx,workx) * τinv / max(one(T), normq + normx + normz)
 
     #absolute and relative gaps
     info.gap_abs = abs(info.cost_primal - info.cost_dual)
@@ -121,7 +191,8 @@ end
 function info_save_prev_iterate(
     info::DefaultInfo{T},
     variables::DefaultVariables{T},
-    prev_variables::DefaultVariables{T}
+    prev_variables::DefaultVariables{T},
+    use_gpu::Bool
 ) where {T}
 
     info.prev_cost_primal = info.cost_primal
@@ -131,13 +202,14 @@ function info_save_prev_iterate(
     info.prev_gap_abs     = info.gap_abs
     info.prev_gap_rel     = info.gap_rel
 
-    variables_copy_from(prev_variables,variables);
+    variables_copy_from(prev_variables,variables,use_gpu);
 end
 
 function info_reset_to_prev_iterate(
     info::DefaultInfo{T},
     variables::DefaultVariables{T},
-    prev_variables::DefaultVariables{T}
+    prev_variables::DefaultVariables{T},
+    use_gpu::Bool
 ) where {T}
 
     info.cost_primal = info.prev_cost_primal
@@ -147,7 +219,7 @@ function info_reset_to_prev_iterate(
     info.gap_abs     = info.prev_gap_abs
     info.gap_rel     = info.prev_gap_rel
 
-    variables_copy_from(variables,prev_variables);
+    variables_copy_from(variables,prev_variables,use_gpu);
 end
 
 function info_save_scalars(

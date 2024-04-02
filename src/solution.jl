@@ -4,7 +4,8 @@ function solution_finalize!(
 	data::DefaultProblemData{T},
 	variables::DefaultVariables{T},
 	info::DefaultInfo{T},
-	settings::Settings{T}
+	settings::Settings{T},
+	use_gpu::Bool
 ) where {T}
 
 	solution.status  = info.status
@@ -23,15 +24,22 @@ function solution_finalize!(
     end
 
 	#also undo the equilibration
-	d = data.equilibration.d; dinv = data.equilibration.dinv
-	e = data.equilibration.e; einv = data.equilibration.einv
+	if use_gpu
+		d = data.equilibration.d_gpu
+		e = data.equilibration.e_gpu 
+		einv = data.equilibration.einv_gpu
+		map = data.presolver.reduce_map_gpu
+	else
+		d = data.equilibration.d
+		e = data.equilibration.e 
+		einv = data.equilibration.einv
+		map = data.presolver.reduce_map
+	end
 	cscale = data.equilibration.c[]
 
 	@. solution.x = variables.x * d * scaleinv
 
-	map = data.presolver.reduce_map
 	if !isnothing(map) 
-		map = data.presolver.reduce_map
 		@. solution.z[map.keep_index] = variables.z * e * (scaleinv / cscale)
 		@. solution.s[map.keep_index] = variables.s * einv * scaleinv
 

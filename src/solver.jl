@@ -90,38 +90,46 @@ function setup!(
 
     @timeit s.timers "setup!" begin
 
+        use_gpu = (s.settings.direct_kkt_solver && s.settings.direct_solve_method == :cudss)
+        s.use_gpu = use_gpu
+
         #reduce the cone sizes.  (A,b) will be reduced 
         #within the problem data constructor.  Also makes
         #an internal copy of the user cone specification
-        presolver = Presolver{T}(A,b,cones,s.settings)
-
-        s.cones  = CompositeCone{T}(presolver.cone_specs)
-        s.data   = DefaultProblemData{T}(P,q,A,b,s.cones,presolver,s.settings)
+        presolver = Presolver{T}(A,b,cones,s.settings,use_gpu)
+        cpucones = CompositeCone{T}(presolver.cone_specs)
+        s.cones  = use_gpu ? CompositeConeGPU{T}(presolver.cone_specs) : cpucones
+        s.data   = DefaultProblemData{T}(P,q,A,b,cpucones,presolver,s.settings)
         s.data.m == s.cones.numel || throw(DimensionMismatch())
 
-        s.variables = DefaultVariables{T}(s.data.n,s.cones)
-        s.residuals = DefaultResiduals{T}(s.data.n,s.data.m)
+        s.variables = DefaultVariables{T}(s.data.n,s.cones,use_gpu)
+        s.residuals = DefaultResiduals{T}(s.data.n,s.data.m,use_gpu)
 
         #equilibrate problem data immediately on setup.
         #this prevents multiple equlibrations if solve!
         #is called more than once.
         @timeit s.timers "equilibration" begin
-            data_equilibrate!(s.data,s.cones,s.settings)
+            data_equilibrate!(s.data,cpucones,s.settings)
         end
-
+      
         @timeit s.timers "kkt init" begin
-            s.kktsystem = DefaultKKTSystem{T}(s.data,s.cones,s.settings,s.timers)
+            if use_gpu
+                gpu_data_copy!(s.data)  #YC: copy data to GPU, should be optimized later
+                s.kktsystem = DefaultKKTSystemGPU{T}(s.data,cpucones,s.settings,use_gpu)
+            else
+                s.kktsystem = DefaultKKTSystem{T}(s.data,s.cones,s.settings)
+            end
         end
 
         # work variables for assembling step direction LHS/RHS
-        s.step_rhs  = DefaultVariables{T}(s.data.n,s.cones)
-        s.step_lhs  = DefaultVariables{T}(s.data.n,s.cones)
+        s.step_rhs  = DefaultVariables{T}(s.data.n,s.cones,use_gpu)
+        s.step_lhs  = DefaultVariables{T}(s.data.n,s.cones,use_gpu)
 
         # a saved copy of the previous iterate
-        s.prev_vars = DefaultVariables{T}(s.data.n,s.cones)
+        s.prev_vars = DefaultVariables{T}(s.data.n,s.cones,use_gpu)
 
         # user facing results go here
-        s.solution    = DefaultSolution{T}(s.data.presolver.mfull,s.data.n)
+        s.solution    = DefaultSolution{T}(s.data.presolver.mfull,s.data.n,use_gpu)
 
     end
 
@@ -172,6 +180,11 @@ function solve!(
     α = zero(T)
     μ = typemax(T)
 
+    #select functions depending on devices
+    use_gpu = s.use_gpu
+    residual_update = use_gpu ? residuals_update_gpu! : residuals_update!
+    info_update     = use_gpu ? info_update_gpu! : info_update!
+
     # solver release info, solver config
     # problem dimensions, cone type etc
     @notimeit begin
@@ -200,7 +213,7 @@ function solve!(
 
             #update the residuals
             #--------------
-            @timeit s.timers "residual update" residuals_update!(s.residuals,s.variables,s.data)
+            @timeit s.timers "residual update" residual_update(s.residuals,s.variables,s.data)
 
             #calculate duality gap (scaled)
             #--------------
@@ -213,16 +226,16 @@ function solve!(
             #convergence check and printing
             #--------------
 
-            info_update!(
+            @timeit s.timers "info update" info_update(
                 s.info,s.data,s.variables,
-                s.residuals,s.settings,s.timers
+                s.residuals,s.kktsystem,s.settings,s.timers
             )
             @notimeit info_print_status(s.info,s.settings)
             isdone = info_check_termination!(s.info,s.residuals,s.settings,iter)
 
             # check for termination due to slow progress and update strategy
             if isdone
-                (action,scaling) = _strategy_checkpoint_insufficient_progress(s,scaling) 
+                (action,scaling) = _strategy_checkpoint_insufficient_progress(s,scaling,use_gpu) 
                 if     action ∈ [NoUpdate,Fail]; break;
                 elseif action === Update; continue; 
                 end
@@ -317,9 +330,10 @@ function solve!(
             end 
 
             # Copy previous iterate in case the next one is a dud
-            info_save_prev_iterate(s.info,s.variables,s.prev_vars)
+            info_save_prev_iterate(s.info,s.variables,s.prev_vars,use_gpu)
 
-            @timeit s.timers "final update" variables_add_step!(s.variables,s.step_lhs,α)
+            # @timeit s.timers "final update" variables_add_step!(s.variables,s.step_lhs,α)
+            @timeit s.timers "final update" variables_add_step!(s.variables,s.step_lhs,α,use_gpu)
 
         end  #end while
         #----------
@@ -337,7 +351,7 @@ function solve!(
     end 
 
     info_finalize!(s.info,s.residuals,s.settings,s.timers)  #halts timers
-    solution_finalize!(s.solution,s.data,s.variables,s.info,s.settings)
+    solution_finalize!(s.solution,s.data,s.variables,s.info,s.settings,use_gpu)
 
     @notimeit info_print_footer(s.info,s.settings)
 
@@ -415,7 +429,7 @@ end
 
 
 
-function _strategy_checkpoint_insufficient_progress(s::Solver{T},scaling::ScalingStrategy) where {T} 
+function _strategy_checkpoint_insufficient_progress(s::Solver{T},scaling::ScalingStrategy,use_gpu::Bool) where {T} 
 
     if s.info.status != INSUFFICIENT_PROGRESS
         # there is no problem, so nothing to do
@@ -423,7 +437,7 @@ function _strategy_checkpoint_insufficient_progress(s::Solver{T},scaling::Scalin
     else 
         #recover old iterate since "insufficient progress" often 
         #involves actual degradation of results 
-        info_reset_to_prev_iterate(s.info,s.variables,s.prev_vars)
+        info_reset_to_prev_iterate(s.info,s.variables,s.prev_vars,use_gpu)
 
         # If problem is asymmetric, we can try to continue with the dual-only strategy
         if !is_symmetric(s.cones) && (scaling == PrimalDual::ScalingStrategy)
@@ -496,3 +510,12 @@ end
 
 get_solution(s::Solver{T}) where {T} = s.solution
 get_info(s::Solver{T}) where {T} = s.info
+
+#copy data from CPU to GPU
+function gpu_data_copy!(data::DefaultProblemData{T}) where{T}
+    data.P_gpu = CuSparseMatrixCSR(data.P)
+    data.q_gpu = unsafe_wrap(CuArray{T,1},data.q)
+    data.A_gpu = CuSparseMatrixCSR(data.A)
+    data.At_gpu = CuSparseMatrixCSR(data.A')
+    data.b_gpu = unsafe_wrap(CuArray{T,1},data.b)
+end

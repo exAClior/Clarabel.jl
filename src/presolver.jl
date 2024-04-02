@@ -1,15 +1,15 @@
 
-struct PresolverRowReductionIndex 
+struct PresolverRowReductionIndex
 
     # vector of length = original RHS.   Entries are false
     # for those rows that should be eliminated before solve
-    keep_logical::Vector{Bool}
+    keep_logical::AbstractVector{Bool}
 
     # vector of length = reduced RHS, taking values
     # that map reduced b back to their original index
     # This is just findall(keep_logical) and is held for
     # efficient solution repopulation
-    keep_index::Vector{Int64}
+    keep_index::AbstractVector{Int64}
 
 end
 
@@ -20,6 +20,7 @@ struct Presolver{T}
 
     # record of reduced constraints for NN cones with inf bounds
     reduce_map::Union{Nothing,PresolverRowReductionIndex}
+    reduce_map_gpu::Union{Nothing,PresolverRowReductionIndex}
 
     # size of original and reduced RHS, respectively 
     mfull::Int64 
@@ -35,7 +36,8 @@ struct Presolver{T}
         A::AbstractMatrix{T},
         b::Vector{T},
         cone_specs::Vector{<:SupportedCone},
-        settings::Settings{T}
+        settings::Settings{T},
+        use_gpu::Bool
     ) where {T}
 
         infbound = Clarabel.get_infinity()
@@ -54,8 +56,15 @@ struct Presolver{T}
                 (nothing,mfull)
             end 
         end
+
+        if use_gpu && !isnothing(reduce_map)
+            reduce_map_gpu = PresolverRowReductionIndex(unsafe_wrap(CuArray{Bool,1},reduce_map.keep_logical), unsafe_wrap(CuArray{Int64,1},reduce_map.keep_index))
+        else
+            reduce_map_gpu = nothing
+        end
+
     
-        return new(cone_specs,reduce_map,mfull, mreduced, infbound)
+        return new(cone_specs,reduce_map,reduce_map_gpu,mfull, mreduced, infbound)
 
     end
 

@@ -28,6 +28,7 @@ module Clarabel
     include("./cones/cone_types.jl")
     include("./cones/cone_dispatch.jl")
     include("./cones/compositecone_type.jl")
+    include("./gpucones/compositecone_type_gpu.jl")
 
     #core solver components
     include("./settings.jl")
@@ -38,8 +39,6 @@ module Clarabel
     include("./variables.jl")
     include("./residuals.jl")
     include("./problemdata.jl")
-    include("./info.jl")
-    include("./solution.jl")
 
     #direct LDL linear solve methods
     include("./kktsolvers/direct-ldl/includes.jl")
@@ -51,7 +50,11 @@ module Clarabel
     include("./kktsolvers/kktsolver_directldl.jl")
 
     include("./kktsystem.jl")
+    include("./kktsystem_gpu.jl")
 
+    include("./info.jl")
+    include("./solution.jl")
+    
     # Indirect KKT solver
     include("./kktsolvers/kktsolver_indirect.jl")
     include("./kktsolvers/indirect/preconditioner/includes.jl")
@@ -77,6 +80,12 @@ module Clarabel
     include("./cones/coneops_compositecone.jl")
     include("./cones/coneops_nonsymmetric_common.jl")
     include("./cones/coneops_symmetric_common.jl")
+
+    #GPU cone implementations
+    include("./gpucones/coneops_zerocone_gpu.jl")
+    include("./gpucones/coneops_nncone_gpu.jl")
+    include("./gpucones/coneops_socone_gpu.jl")
+    include("./gpucones/coneops_compositecone_gpu.jl")
 
     #various algebraic utilities
     include("./utils/mathutils.jl")

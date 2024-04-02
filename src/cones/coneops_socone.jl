@@ -223,7 +223,7 @@ function mul_Hs!(
 ) where {T}
 
     # y = = H^{-1}x = W^TWx
-    # where H^{-1} = \eta^{-2} (2*ww^T - J)
+    # where H^{-1} = \eta^{2} (2*ww^T - J)
     c = 2*dot(K.w,x)
     y .= x
     y[1] = -x[1]
