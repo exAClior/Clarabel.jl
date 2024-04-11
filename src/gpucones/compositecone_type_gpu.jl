@@ -22,8 +22,8 @@ const ConeTypeDict = Dict{DataType,Cint}(
 )
 
 struct CompositeConeGPU{T} <: AbstractCone{T}
-
-    cones::AbstractVector{AbstractCone{T}}
+    #YC: redundant CPU data, need to be removed later
+    cones::AbstractVector{AbstractCone{T}}  
 
     #count of each cone type
     type_counts::Dict{Type,AbstractVector{Cint}}
@@ -40,11 +40,19 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     _is_symmetric::Bool
     n_linear::Cint
     n_soc::Cint
+    n_exp::Cint
+    n_pow::Cint
 
     #data
     w::AbstractVector{T}
     λ::AbstractVector{T}
     η::AbstractVector{T}
+
+    #nonsymmetric cone
+    αp::AbstractVector{T}           #power parameters of power cones
+    H_dual::AbstractArray{T}        #Hessian of the dual barrier at z 
+    Hs::AbstractArray{T}            #scaling matrix
+    grad::AbstractArray{T}         #gradient of the dual barrier at z 
 
     #step_size
     α::AbstractVector{T}
@@ -98,17 +106,37 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         n_nonnegative = haskey(type_counts,NonnegativeCone) ? length(type_counts[NonnegativeCone]) : 0
         n_linear = n_zero + n_nonnegative
         n_soc = haskey(type_counts,SecondOrderCone) ? length(type_counts[SecondOrderCone]) : 0
-        
+        n_exp = haskey(type_counts,ExponentialCone) ? length(type_counts[ExponentialCone]) : 0
+        n_pow = haskey(type_counts,PowerCone) ? length(type_counts[PowerCone]) : 0
+
         numel_linear  = sum(cone -> Clarabel.numel(cone), cones[1:n_linear]; init = 0)
         max_linear = maximum(cone -> Clarabel.numel(cone), cones[1:n_linear]; init = 0)
         numel_soc  = sum(cone -> Clarabel.numel(cone), cones[n_linear+1:n_linear+n_soc]; init = 0)
+
         w = CuVector{T}(undef,numel_linear+numel_soc)
         λ = CuVector{T}(undef,numel_linear+numel_soc)
         η = CuVector{T}(undef,n_soc)
-        
-        α = CuVector{T}(undef,max(max_linear,n_soc)) #workspace for step size calculation
 
-        return new(cones,type_counts,numel,degree,CuVector(rng_cones_cpu),CuVector(rng_blocks_cpu),_is_symmetric,n_linear,n_soc,w,λ,η,α)
+        #Initialize space for nonsymmetric cones
+        αp = Vector{T}(undef,n_pow)
+        pow_ind = n_linear + n_soc + n_exp
+        #store the power parameter of each power cone
+        for i in 1:n_pow
+            αp[i] = cones[i+pow_ind].α
+        end
+
+        αp = CuVector(αp)
+        H_dual = CuArray{T}(undef,n_exp+n_pow,3,3)
+        Hs = CuArray{T}(undef,n_exp+n_pow,3,3)
+        grad = CuArray{T}(undef,n_exp+n_pow,3)
+
+        α = CuVector{T}(undef,max(max_linear,n_soc,n_exp,n_pow)) #workspace for step size calculation
+
+        return new(cones,type_counts,numel,degree,CuVector(rng_cones_cpu),CuVector(rng_blocks_cpu),_is_symmetric,
+                n_linear,n_soc,n_exp,n_pow,
+                w,λ,η,
+                αp,H_dual,Hs,grad,
+                α)
     end
 end
 

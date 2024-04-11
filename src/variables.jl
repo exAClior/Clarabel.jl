@@ -158,7 +158,7 @@ function variables_combined_step_rhs!(
         step.z .*= m
     end
 
-    combined_ds_shift!(cones,d.z,step.z,step.s,dotσμ)
+    combined_ds_shift!(cones,d.z,step.z,step.s,variables.z,dotσμ)
 
     #We are relying on d.s = affine_ds already here
     d.s .+= d.z
@@ -220,7 +220,7 @@ end
 # the primal variables.   Used for nonsymmetric problems.
 function variables_unit_initialization!(
     variables::DefaultVariables{T},
-    cones::CompositeCone{T}
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}},
 ) where {T}
 
     #set conic variables to units and x to 0

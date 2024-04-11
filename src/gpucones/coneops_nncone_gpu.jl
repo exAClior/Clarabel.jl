@@ -38,18 +38,17 @@ function scaled_unit_shift_nonnegative!(
     return nothing
 end
 
-# # unit initialization for asymmetric solves
-# function unit_initialization!(
-#    K::NonnegativeCone{T},
-#    z::AbstractVector{T},
-#    s::AbstractVector{T}
-# ) where{T}
+# unit initialization for asymmetric solves
+function unit_initialization_nonnegative!(
+   z::AbstractVector{T},
+   s::AbstractVector{T}
+) where{T}
 
-#     s .= one(T)
-#     z .= one(T)
+    s .= one(T)
+    z .= one(T)
 
-#    return nothing
-# end
+   return nothing
+end
 
 #configure cone internals to provide W = I scaling
 function set_identity_scaling_nonnegative!(
@@ -149,23 +148,42 @@ function Δs_from_Δz_offset_nonnegative!(
     @. out = ds / z
 end
 
-#return maximum allowable step length while remaining in the nn cone
-function _kernel_step_length_nonnegative!(
+function step_length_nonnegative(
     dz::AbstractVector{T},
     ds::AbstractVector{T},
      z::AbstractVector{T},
      s::AbstractVector{T},
      α::AbstractVector{T},
-     rng_cone::UnitRange
+     len_nn::Cint,
+     αmax::T
 ) where {T}
-    len = length(rng_cone)
-    shift = rng_cone.start-1
+
+    kernel = @cuda launch=false _kernel_step_length_nonnegative(dz,ds,z,s,α,len_nn,αmax)
+    config = launch_configuration(kernel.fun)
+    threads = min(len_nn, config.threads)
+    blocks = cld(len_nn, threads)
+
+    CUDA.@sync kernel(dz,ds,z,s,α,len_nn,αmax; threads, blocks)
+
+    return minimum(α)
+end
+
+#return maximum allowable step length while remaining in the nn cone
+function _kernel_step_length_nonnegative(
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+     z::AbstractVector{T},
+     s::AbstractVector{T},
+     α::AbstractVector{T},
+     len_rng::Cint,
+     αmax::T
+) where {T}
+
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
-    if i < len
-        cur_i = shift + i
-        α[i] = dz[cur_i] < 0 ? (min(α[i],-z[cur_i]/dz[cur_i])) : α[i]
-        α[i] = ds[cur_i] < 0 ? (min(α[i],-s[cur_i]/ds[cur_i])) : α[i]
+    if i <= len_rng
+        α[i] = dz[i] < 0 ? (min(α[i],-z[i]/dz[i])) : α[i]
+        α[i] = ds[i] < 0 ? (min(α[i],-s[i]/ds[i])) : α[i]
     end
 
     return nothing

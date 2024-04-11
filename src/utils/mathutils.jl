@@ -372,7 +372,7 @@ end
 # NB: this is only marginally slower than the explicit
 # 3x3 LDL decomposition, which would avoid sqrts.  
 
-function cholesky_3x3_explicit_factor!(L,A)
+@inline function cholesky_3x3_explicit_factor!(L,A)
 
     t = A[1,1]
 
@@ -400,7 +400,7 @@ end
 
 # Unrolled 3x3 forward/backward substitution for a Cholesky factor
 
-function cholesky_3x3_explicit_solve!(L,b)
+@inline function cholesky_3x3_explicit_solve!(L,b)
 
     c1 = b[1]/L[1,1]
     c2 = (b[2]*L[1,1] - b[1]*L[2,1])/(L[1,1]*L[2,2])

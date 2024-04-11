@@ -168,6 +168,7 @@ function combined_ds_shift!(
     shift::ConicVector{T},
     step_z::ConicVector{T},
     step_s::ConicVector{T},
+    z::ConicVector{T},
     σμ::T
 ) where {T}
 

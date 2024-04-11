@@ -52,18 +52,17 @@ function scaled_unit_shift_zero!(
 
 end
 
-# # unit initialization for asymmetric solves
-# function unit_initialization!(
-#     K::ZeroCone{T},
-# 	z::AbstractVector{T},
-#     s::AbstractVector{T}
-# ) where{T}
+# unit initialization for asymmetric solves
+function unit_initialization_zero!(
+	z::AbstractVector{T},
+    s::AbstractVector{T}
+) where{T}
 
-#     s .= zero(T)
-#     z .= zero(T)
+    s .= zero(T)
+    z .= zero(T)
 
-#     return nothing
-# end
+    return nothing
+end
 
 function set_identity_scaling!()
     #do nothing.   "Identity" scaling will be zero for equalities

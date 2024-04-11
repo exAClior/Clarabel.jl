@@ -285,7 +285,7 @@ function solve!(
 
                 #calculate step length and centering parameter
                 #--------------
-                @timeit s.timers "find step 1" α = solver_get_step_length(s,:affine,scaling)
+                @timeit s.timers "find step 1" α = solver_get_step_length(s,:affine,scaling,use_gpu)
                 σ = _calc_centering_parameter(α)
 
                 #make a reduced Mehrotra correction in the first iteration
@@ -320,7 +320,7 @@ function solve!(
 
             #compute final step length and update the current iterate
             #--------------
-            @timeit s.timers "find step 2" α = solver_get_step_length(s,:combined,scaling)
+            @timeit s.timers "find step 2" α = solver_get_step_length(s,:combined,scaling,use_gpu)
 
             # check for undersized step and update strategy
             (action,scaling) = _strategy_checkpoint_small_step(s, α, scaling)
@@ -383,7 +383,7 @@ function solver_default_start!(s::Solver{T}) where {T}
 end
 
 
-function solver_get_step_length(s::Solver{T},steptype::Symbol,scaling::ScalingStrategy) where{T}
+function solver_get_step_length(s::Solver{T},steptype::Symbol,scaling::ScalingStrategy,use_gpu::Bool) where{T}
 
     # step length to stay within the cones
     α = variables_calc_step_length(
@@ -391,8 +391,9 @@ function solver_get_step_length(s::Solver{T},steptype::Symbol,scaling::ScalingSt
         s.cones, s.settings, steptype
     )
 
+    #YC: not implemented for GPU at the moment
     # additional barrier function limits for asymmetric cones
-    if (!is_symmetric(s.cones) && steptype == :combined && scaling == Dual)
+    if (!use_gpu && !is_symmetric(s.cones) && steptype == :combined && scaling == Dual)
         αinit = α
         α = solver_backtrack_step_to_barrier(s,αinit)
     end

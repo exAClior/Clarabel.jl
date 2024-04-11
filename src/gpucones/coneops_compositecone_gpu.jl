@@ -6,11 +6,11 @@ numel(cones::CompositeConeGPU{T}) where {T}  = cones.numel
 # # dispatch operators for multiple cones
 # # -----------------------------------------------------
 
-# function is_symmetric(cones::CompositeCone{T}) where {T}
-#     #true if all pieces are symmetric.  
-#     #determined during obj construction
-#     return cones._is_symmetric
-# end
+function is_symmetric(cones::CompositeConeGPU{T}) where {T}
+    #true if all pieces are symmetric.  
+    #determined during obj construction
+    return cones._is_symmetric
+end
 
 # function is_sparse_expandable(cones::CompositeCone{T}) where {T}
     
@@ -20,9 +20,9 @@ numel(cones::CompositeConeGPU{T}) where {T}  = cones.numel
     
 # end
 
-# function allows_primal_dual_scaling(cones::CompositeCone{T}) where {T}
-#     all(allows_primal_dual_scaling, cones)
-# end
+function allows_primal_dual_scaling(cones::CompositeConeGPU{T}) where {T}
+    all(allows_primal_dual_scaling, cones)
+end
 
 
 # function rectify_equilibration!(
@@ -121,25 +121,72 @@ function scaled_unit_shift!(
 
     return nothing
 
-    # for (cone,zi) in zip(cones,z.views)
-    #     @conedispatch scaled_unit_shift!(cone,zi,α,pd)
-    # end
-
-    # return nothing
 end
 
-# # unit initialization for asymmetric solves
-# function unit_initialization!(
-#     cones::CompositeCone{T},
-#     z::ConicVector{T},
-#     s::ConicVector{T}
-# ) where {T}
+# unit initialization for asymmetric solves
+function unit_initialization!(
+    cones::CompositeConeGPU{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T}
+) where {T}
 
-#     for (cone,zi,si) in zip(cones,z.views,s.views)
-#         @conedispatch unit_initialization!(cone,zi,si)
-#     end
-#     return nothing
-# end
+    # for (cone,zi,si) in zip(cones,z.views,s.views)
+    #     @conedispatch unit_initialization!(cone,zi,si)
+    # end
+    # return nothing
+
+    n_linear = cones.n_linear
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    αp = cones.αp
+    rng_cones = cones.rng_cones
+    type_counts = cones.type_counts
+
+    CUDA.@allowscalar begin
+        for i in type_counts[ZeroCone]
+            rng_cone_i = rng_cones[i]
+            @views unit_initialization_zero!(z[rng_cone_i],s[rng_cone_i])
+        end
+        for i in type_counts[NonnegativeCone]
+            rng_cone_i = rng_cones[i]
+            @views unit_initialization_nonnegative!(z[rng_cone_i],s[rng_cone_i])
+        end
+        CUDA.synchronize()
+    end
+
+    if n_soc > 0
+        kernel = @cuda launch=false _kernel_unit_initialization_soc!(z,s,rng_cones,n_linear,n_soc)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_soc, config.threads)
+        blocks = cld(n_soc, threads)
+
+        CUDA.@sync kernel(z,s,rng_cones,n_linear,n_soc; threads, blocks)
+    end
+
+    if n_exp > 0
+        n_shift = n_linear+n_soc
+        kernel = @cuda launch=false _kernel_unit_initialization_exp!(z,s,rng_cones,n_shift,n_exp)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_exp, config.threads)
+        blocks = cld(n_exp, threads)
+
+        CUDA.@sync kernel(z,s,rng_cones,n_shift,n_exp; threads, blocks)
+    end
+
+    if n_pow > 0
+        n_shift = n_linear+n_soc+n_exp
+        kernel = @cuda launch=false _kernel_unit_initialization_pow!(z,s,αp,rng_cones,n_shift,n_pow)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_pow, config.threads)
+        blocks = cld(n_pow, threads)
+
+        CUDA.@sync kernel(z,s,αp,rng_cones,n_shift,n_pow; threads, blocks)
+    end
+
+    return nothing
+
+end
 
 function set_identity_scaling!(
     cones::CompositeConeGPU{T}
@@ -178,6 +225,12 @@ function update_scaling!(
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    αp = cones.αp
+    grad = cones.grad
+    Hs = cones.Hs
+    H_dual = cones.H_dual
     rng_cones = cones.rng_cones
     type_counts = cones.type_counts
     w = cones.w
@@ -202,6 +255,26 @@ function update_scaling!(
         CUDA.@sync kernel(s,z,w,λ,η,rng_cones,n_linear,n_soc; threads, blocks)
     end
 
+    if n_exp > 0
+        n_shift = n_linear+n_soc
+        kernel = @cuda launch=false _kernel_update_scaling_exp!(s,z,grad,Hs,H_dual,rng_cones,μ,scaling_strategy,n_shift,n_exp)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_exp, config.threads)
+        blocks = cld(n_exp, threads)
+
+        CUDA.@sync kernel(s,z,grad,Hs,H_dual,rng_cones,μ,scaling_strategy,n_shift,n_exp; threads, blocks)
+    end
+
+    if n_pow > 0
+        n_shift = n_linear+n_soc+n_exp
+        kernel = @cuda launch=false _kernel_update_scaling_pow!(s,z,grad,Hs,H_dual,αp,rng_cones,μ,scaling_strategy,n_shift,n_exp,n_pow)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_pow, config.threads)
+        blocks = cld(n_pow, threads)
+
+        CUDA.@sync kernel(s,z,grad,Hs,H_dual,αp,rng_cones,μ,scaling_strategy,n_shift,n_exp,n_pow; threads, blocks)
+    end
+
     return is_scaling_success = true
 end
 
@@ -213,6 +286,9 @@ function get_Hs!(
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    Hs = cones.Hs
     type_counts = cones.type_counts
     rng_blocks = cones.rng_blocks
     rng_cones = cones.rng_cones
@@ -237,6 +313,25 @@ function get_Hs!(
         CUDA.@sync kernel(Hsblocks,cones.w,cones.η,rng_cones,rng_blocks,n_linear,n_soc; threads, blocks)
     end
 
+    if n_exp > 0
+        n_shift = n_linear+n_soc
+        kernel = @cuda launch=false _kernel_get_Hs_exp!(Hsblocks,Hs,rng_blocks,n_shift,n_exp)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_exp, config.threads)
+        blocks = cld(n_exp, threads)
+
+        CUDA.@sync kernel(Hsblocks,Hs,rng_blocks,n_shift,n_exp; threads, blocks)
+    end
+
+    if n_pow > 0
+        n_shift = n_linear+n_soc+n_exp
+        kernel = @cuda launch=false _kernel_get_Hs_pow!(Hsblocks,Hs,rng_blocks,n_shift,n_exp,n_pow)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_pow, config.threads)
+        blocks = cld(n_pow, threads)
+
+        CUDA.@sync kernel(Hsblocks,Hs,rng_blocks,n_shift,n_exp,n_pow; threads, blocks)
+    end
     return nothing
 end
 
@@ -253,6 +348,7 @@ function mul_Hs!(
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    Hs = cones.Hs
     type_counts = cones.type_counts
     rng_cones = cones.rng_cones
     w = cones.w
@@ -275,6 +371,17 @@ function mul_Hs!(
         blocks = cld(n_soc, threads)
 
         CUDA.@sync kernel(y,x,w,η,rng_cones,n_linear,n_soc; threads, blocks)
+    end
+
+    n_nonsymmetric = cones.n_exp + cones.n_pow
+    if n_nonsymmetric > 0
+        n_shift = n_linear+n_soc
+        kernel = @cuda launch=false _kernel_mul_Hs_nonsymmetric!(y,Hs,x,rng_cones,n_shift,n_nonsymmetric)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_nonsymmetric, config.threads)
+        blocks = cld(n_nonsymmetric, threads)
+
+        CUDA.@sync kernel(y,Hs,x,rng_cones,n_shift,n_nonsymmetric; threads, blocks)
     end
 
     return nothing
@@ -311,6 +418,14 @@ function affine_ds!(
         CUDA.@sync kernel(ds,cones.λ,rng_cones,n_linear,n_soc; threads, blocks)
     end
 
+    #update nonsymmetric cones
+    if cones.n_exp+cones.n_pow > 0
+        start_ind = length(cones.w)+1
+
+        @. ds[start_ind:end] = s[start_ind:end]
+        CUDA.synchronize()
+    end
+
     return nothing
 end
 
@@ -319,11 +434,17 @@ function combined_ds_shift!(
     shift::AbstractVector{T},
     step_z::AbstractVector{T},
     step_s::AbstractVector{T},
+    z::AbstractVector{T},
     σμ::T
 ) where {T}
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    grad = cones.grad
+    H_dual = cones.H_dual
+    αp = cones.αp
     type_counts = cones.type_counts
     rng_cones = cones.rng_cones
     w = cones.w
@@ -348,7 +469,27 @@ function combined_ds_shift!(
         CUDA.@sync kernel(shift,step_z,step_s,w,η,rng_cones,n_linear,n_soc,σμ; threads, blocks)
     end
 
-    # return nothing
+    if n_exp > 0
+        n_shift = n_linear+n_soc
+        kernel = @cuda launch=false _kernel_combined_ds_shift_exp!(shift,step_z,step_s,z,grad,H_dual,rng_cones,σμ,n_shift,n_exp)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_exp, config.threads)
+        blocks = cld(n_exp, threads)
+
+        CUDA.@sync kernel(shift,step_z,step_s,z,grad,H_dual,rng_cones,σμ,n_shift,n_exp; threads, blocks)
+    end
+
+    if n_pow > 0
+        n_shift = n_linear+n_soc+n_exp
+        kernel = @cuda launch=false _kernel_combined_ds_shift_pow!(shift,step_z,step_s,z,grad,H_dual,αp,rng_cones,σμ,n_shift,n_exp,n_pow)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_pow, config.threads)
+        blocks = cld(n_pow, threads)
+
+        CUDA.@sync kernel(shift,step_z,step_s,z,grad,H_dual,αp,rng_cones,σμ,n_shift,n_exp,n_pow; threads, blocks)
+    end
+
+    return nothing
 
 end
 
@@ -386,6 +527,13 @@ function Δs_from_Δz_offset!(
 
         CUDA.@sync kernel(out,ds,z,w,λ,η,rng_cones,n_linear,n_soc; threads, blocks)
     end
+
+    if cones.n_exp+cones.n_pow > 0
+        start_ind = length(w)+1
+        @. out[start_ind:end] = ds[start_ind:end]
+        CUDA.synchronize()
+    end
+
     return nothing
 end
 
@@ -402,9 +550,12 @@ function step_length(
 
     n_linear        = cones.n_linear
     n_soc           = cones.n_soc
+    n_exp           = cones.n_exp
+    n_pow           = cones.n_pow
     type_counts     = cones.type_counts
     rng_cones       = cones.rng_cones
     α               = cones.α
+    αp              = cones.αp
 
     CUDA.@sync @. α = αmax          #Initialize step size
 
@@ -412,24 +563,55 @@ function step_length(
         for i in type_counts[NonnegativeCone]
             len_nn = Cint(length(rng_cones[i]))
             rng_cone_i = rng_cones[i]
-            kernel = @cuda launch=false _kernel_step_length_nonnegative!(dz,ds,z,s,α,rng_cone_i)
-            config = launch_configuration(kernel.fun)
-            threads = min(len_nn, config.threads)
-            blocks = cld(len_nn, threads)
-    
-            CUDA.@sync kernel(dz,ds,z,s,α,rng_cone_i; threads, blocks)
-            αmax = minimum(α)
+            @views αi = step_length_nonnegative(dz[rng_cone_i],ds[rng_cone_i],z[rng_cone_i],s[rng_cone_i],α[1:len_nn],len_nn,αmax)
+            αmax = min(αmax,αi)
         end
     end
 
     if n_soc > 0
-        kernel = @cuda launch=false _kernel_step_length_soc!(dz,ds,z,s,α,rng_cones,n_linear,n_soc)
+        kernel = @cuda launch=false _kernel_step_length_soc(dz,ds,z,s,α,rng_cones,n_linear,n_soc)
         config = launch_configuration(kernel.fun)
         threads = min(n_soc, config.threads)
         blocks = cld(n_soc, threads)
 
         CUDA.@sync kernel(dz,ds,z,s,α,rng_cones,n_linear,n_soc; threads, blocks)
-        αmax = min(αmax,minimum(α))
+        @views αmax = min(αmax,minimum(α[1:n_soc]))
+        if αmax < 0
+            throw(DomainError("starting point of line search not in SOC"))
+        end
+    end
+
+    step = settings.linesearch_backtrack_step
+    αmin = settings.min_terminate_step_length
+    #if we have any nonsymmetric cones, then back off from full steps slightly
+    #so that centrality checks and logarithms don't fail right at the boundaries
+    if(!is_symmetric(cones))
+        αmax = min(αmax,settings.max_step_fraction)
+    end
+  
+    if n_exp > 0
+        n_shift = n_linear+n_soc
+        kernel = @cuda launch=false _kernel_step_length_exp(dz,ds,z,s,α,rng_cones,αmax,αmin,step,n_shift,n_exp)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_exp, config.threads)
+        blocks = cld(n_exp, threads)
+
+        CUDA.@sync kernel(dz,ds,z,s,α,rng_cones,αmax,αmin,step,n_shift,n_exp; threads, blocks)
+        @views αmax = min(αmax,minimum(α[1:n_exp]))
+        if αmax < 0
+            throw(DomainError("starting point of line search not in SOC"))
+        end
+    end
+
+    if n_pow > 0
+        n_shift = n_linear+n_soc+n_exp
+        kernel = @cuda launch=false _kernel_step_length_pow(dz,ds,z,s,α,αp,rng_cones,αmax,αmin,step,n_shift,n_pow)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_pow, config.threads)
+        blocks = cld(n_pow, threads)
+
+        CUDA.@sync kernel(dz,ds,z,s,α,αp,rng_cones,αmax,αmin,step,n_shift,n_pow; threads, blocks)
+        @views αmax = min(αmax,minimum(α[1:n_pow]))
         if αmax < 0
             throw(DomainError("starting point of line search not in SOC"))
         end

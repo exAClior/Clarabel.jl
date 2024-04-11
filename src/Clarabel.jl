@@ -85,7 +85,10 @@ module Clarabel
     include("./gpucones/coneops_zerocone_gpu.jl")
     include("./gpucones/coneops_nncone_gpu.jl")
     include("./gpucones/coneops_socone_gpu.jl")
+    include("./gpucones/coneops_expcone_gpu.jl")
+    include("./gpucones/coneops_powcone_gpu.jl")
     include("./gpucones/coneops_compositecone_gpu.jl")
+    include("./gpucones/coneops_nonsymmetric_common_gpu.jl")
 
     #various algebraic utilities
     include("./utils/mathutils.jl")

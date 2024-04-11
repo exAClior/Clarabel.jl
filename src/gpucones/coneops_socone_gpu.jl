@@ -56,24 +56,35 @@ function _kernel_scaled_unit_shift_soc!(
     return nothing
 end
 
-# # unit initialization for asymmetric solves
-# function unit_initialization!(
-#     K::SecondOrderCone{T},
-#     z::AbstractVector{T},
-#     s::AbstractVector{T}
-# ) where{T}
- 
-#     s .= zero(T)
-#     z .= zero(T)
+# unit initialization for asymmetric solves
+function _kernel_unit_initialization_soc!(
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_linear::Cint,
+    n_soc::Cint
+) where{T}
 
-#     #Primal or Dual doesn't matter here
-#     #since the cone is self dual anyway
-#     scaled_unit_shift!(K,s,one(T),PrimalCone)
-#     scaled_unit_shift!(K,z,one(T),DualCone)
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
+    if i <= n_soc
+        shift_i = i + n_linear
+        rng_cone_i = rng_cones[shift_i]
+        @views zi = z[rng_cone_i] 
+        @views si = s[rng_cone_i] 
+        zi[1] = one(T)
+        @inbounds for j in 2:length(zi)
+            zi[j] = zero(T)
+        end
+
+        si[1] = one(T)
+        @inbounds for j in 2:length(si)
+            si[j] = zero(T)
+        end
+    end
  
-#     return nothing
-# end 
+    return nothing
+end 
 
 # # configure cone internals to provide W = I scaling
 function _kernel_set_identity_scaling_soc!(
@@ -144,8 +155,8 @@ function _kernel_update_scaling_soc!(
 
         wi[1]  += zi[1]/(zscale)
 
-        @inbounds for i in 2:length(wi)
-            wi[i] -= zi[i]/(zscale)
+        @inbounds for j in 2:length(wi)
+            wi[j] -= zi[j]/(zscale)
         end
     
         wscale = _sqrt_soc_residual_gpu(wi)
@@ -153,8 +164,8 @@ function _kernel_update_scaling_soc!(
 
         #try to force badly scaled w to come out normalized
         w1sq = zero(T)
-        @inbounds for i in 2:length(wi)
-            w1sq += wi[i]*wi[i]
+        @inbounds for j in 2:length(wi)
+            w1sq += wi[j]*wi[j]
         end
         wi[1] = sqrt(1 + w1sq)
 
@@ -165,8 +176,8 @@ function _kernel_update_scaling_soc!(
         coef = inv(si[1]/sscale + zi[1]/zscale + 2*γi)
         c1 = ((γi + zi[1]/zscale)/sscale)
         c2 = ((γi + si[1]/sscale)/zscale)
-        @inbounds for i in 2:length(λi)
-            λi[i] = coef*(c1*si[i] +c2*zi[i])
+        @inbounds for j in 2:length(λi)
+            λi[j] = coef*(c1*si[j] +c2*zi[j])
         end
         λi .*= sqrt(sscale*zscale)
     end
@@ -458,7 +469,7 @@ function _kernel_Δs_from_Δz_offset_soc!(
 end
 
 #return maximum allowable step length while remaining in the socone
-function _kernel_step_length_soc!(
+function _kernel_step_length_soc(
     dz::AbstractVector{T},
     ds::AbstractVector{T},
      z::AbstractVector{T},
@@ -602,8 +613,8 @@ end
 
 @inline function _soc_residual_gpu(z::AbstractVector{T}) where {T} 
     res = z[1]*z[1]
-    for i in 2:length(z)
-        res -= z[i]*z[i]
+    for j in 2:length(z)
+        res -= z[j]*z[j]
     end
     
     return res
