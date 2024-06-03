@@ -94,13 +94,12 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         numel  = sum(cone -> Clarabel.numel(cone), cones; init = 0)
         degree = sum(cone -> Clarabel.degree(cone), cones; init = 0)
 
-        #rng_cones gives the range of each cone
-        #rng_blocks gives the range of Hsblock of each cone
-        rng_cones_cpu = Vector{UnitRange{Cint}}(undef, ncones)
-        rng_blocks_cpu = Vector{UnitRange{Cint}}(undef, ncones)
+        #ranges for the subvectors associated with each cone,
+        #and the range for the corresponding entries
+        #in the Hs sparse block
 
-        _make_rng_cones!(rng_cones_cpu,cones)
-        _make_rng_blocks!(rng_blocks_cpu,cones)
+        rng_cones_cpu  = collect(UnitRange{Cint},rng_cones_iterator(cones));
+        rng_blocks_cpu = collect(UnitRange{Cint},rng_blocks_iterator(cones,true));
 
         n_zero = haskey(type_counts,ZeroCone) ? length(type_counts[ZeroCone]) : 0
         n_nonnegative = haskey(type_counts,NonnegativeCone) ? length(type_counts[NonnegativeCone]) : 0
@@ -162,38 +161,4 @@ function get_type_count(cones::CompositeConeGPU{T}, type::Type) where {T}
     else
         return 0
     end
-end
-
-function _make_rng_cones!(rng_cones,cones)
-
-    if(length(cones) > 0)
-        startidx = 0
-        for (i,cone) in enumerate(cones)
-            endidx = startidx + numel(cone)
-            rng_cones[i] = (startidx+1): endidx
-            startidx = endidx
-        end
-    end
-    return nothing
-end
-
-function _make_rng_blocks!(rng_blocks,cones)
-
-    if(length(cones) > 0)
-        startidx = 0
-        for (i,cone) in enumerate(cones)
-            nvars = numel(cone)
-            #YC: assume no augmented sparse cones 
-            if Hs_is_diagonal(cone) 
-                numelblock = nvars
-            else #dense block
-                numelblock = nvars*nvars
-            end
-
-            endidx = startidx + numelblock
-            rng_blocks[i] = (startidx+1): endidx
-            startidx = endidx
-        end
-    end 
-    return nothing
 end

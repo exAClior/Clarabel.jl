@@ -5,7 +5,9 @@ module Clarabel
     using LimitedLDLFactorizations # for lldl
     const DefaultFloat = Float64
     const DefaultInt   = LinearAlgebra.BlasInt
-    const IdentityMatrix = UniformScaling{Bool}
+
+    # Rust-like Option type
+    const Option{T} = Union{Nothing,T} 
 
     #internal constraint RHS limits.  This let block 
     #hides the INFINITY field in the module and makes 
@@ -31,11 +33,12 @@ module Clarabel
     include("./gpucones/compositecone_type_gpu.jl")
 
     #core solver components
+    include("./abstract_types.jl")
     include("./settings.jl")
-    include("./conicvector.jl")
     include("./statuscodes.jl")
+    include("./chordal/include.jl")
+    include("./types.jl")  
     include("./presolver.jl")
-    include("./types.jl")
     include("./variables.jl")
     include("./residuals.jl")
     include("./problemdata.jl")
@@ -104,9 +107,15 @@ module Clarabel
     #dependencies will be natively supported 
     function __init__()
         @require Pardiso="46dd5b70-b6fb-5a00-ae2d-e8fea33afaf2" begin
-            include("./kktsolvers/direct-ldl/directldl_mklpardiso.jl")  
+            include("./kktsolvers/direct-ldl/directldl_pardiso.jl")  
+        end 
+        @require HSL="34c5aeac-e683-54a6-a0e9-6e0fdc586c50" begin
+            include("./kktsolvers/direct-ldl/directldl_hsl.jl")
         end 
     end
+ 
+    # JSON I/O
+    include("./json.jl")
 
     #MathOptInterface for JuMP/Convex.jl
     module MOI  #extensions providing non-standard MOI constraint types

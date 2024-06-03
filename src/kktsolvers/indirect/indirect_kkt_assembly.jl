@@ -1,12 +1,5 @@
 using SparseArrays, StaticArrays
 
-function _allocate_full_kkt_Hsblocks(type::Type{T}, cones) where{T <: Real}
-
-    Hsblocks = ConicHsblocks{T}(cones,false)
-
-    return Hsblocks
-end
-
 
 function _assemble_full_kkt_matrix(
     P::SparseMatrixCSC{T},
@@ -67,7 +60,7 @@ function _full_kkt_assemble_colcounts(
    sparse_map_iter = Iterators.Stateful(map.sparse_maps)
     
     for (i,cone) = enumerate(cones)
-        row = cones.headidx[i] + n
+        row = first(cones.rng_cones[i]) + n
 
         #add the the Hs blocks in the lower right
         blockdim = numel(cone)
@@ -112,15 +105,16 @@ function _full_kkt_assemble_fill(
     sparse_map_iter = Iterators.Stateful(map.sparse_maps)
 
     for (i,cone) = enumerate(cones)
-        row = cones.headidx[i] + n
+        row = first(cones.rng_cones[i]) + n
 
         #add the the Hs blocks in the lower right
         blockdim = numel(cone)
+        block    = view(map.Hsblocks,cones.rng_blocks[i])
 
         if Hs_is_diagonal(cone)
-            _csc_fill_diag(K,map.Hsblocks.views[i],row,blockdim)
+            _csc_fill_diag(K,block,row,blockdim)
         else
-            _csc_fill_dense_full(K,map.Hsblocks.views[i],row,blockdim)
+            _csc_fill_dense_full(K,block,row,blockdim)
         end
 
         #add sparse expansions columns for sparse cones 

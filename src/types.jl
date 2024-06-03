@@ -1,21 +1,41 @@
 using TimerOutputs
 
 # -------------------------------------
-# abstract type defs
+# default solver component  types 
 # -------------------------------------
-abstract type AbstractVariables{T <: AbstractFloat}   end
-abstract type AbstractEquilibration{T <: AbstractFloat}   end
-abstract type AbstractResiduals{T <: AbstractFloat}   end
-abstract type AbstractProblemData{T <: AbstractFloat} end
-abstract type AbstractKKTSystem{T <: AbstractFloat} end
-abstract type AbstractKKTSolver{T <: AbstractFloat} end
-abstract type AbstractInfo{T <: AbstractFloat} end
-abstract type AbstractSolution{T <: AbstractFloat} end
-abstract type AbstractSolver{T <: AbstractFloat}   end
 
-# -------------------------------------
-# default solver subcomponent implementations
-# -------------------------------------
+# ---------------------
+# presolver and internals 
+# ---------------------
+
+struct PresolverRowReductionIndex 
+
+    # vector of length = original RHS.   Entries are false
+    # for those rows that should be eliminated before solve
+    keep_logical::Vector{Bool}
+
+end
+struct Presolver{T}
+
+   # original cones of the problem
+    init_cones::Vector{SupportedCone}
+
+    # record of reduced constraints for NN cones with inf bounds
+    reduce_map::Option{PresolverRowReductionIndex}
+
+    # size of original and reduced RHS, respectively 
+    mfull::Int64 
+    mreduced::Int64
+
+    # inf bound that was taken from the module level 
+    # and should be applied throughout.   Held here so 
+    # that any subsequent change to the module's state 
+    # won't mess up our solver mid-solve 
+    infbound::Float64 
+
+end
+
+Presolver(args...) = Presolver{DefaultFloat}(args...)
 
 # ---------------
 # variables
@@ -31,13 +51,13 @@ mutable struct DefaultVariables{T} <: AbstractVariables{T}
 
     function DefaultVariables{T}(
         n::Integer, 
-        cones::Union{CompositeCone{T},CompositeConeGPU{T}},
+        m::Integer,
         use_gpu::Bool
     ) where {T}
 
         x = use_gpu ? CuVector{T}(undef,n) : Vector{T}(undef,n)
-        s = use_gpu ? CuVector{T}(undef,cones.numel) : ConicVector{T}(cones)
-        z = use_gpu ? CuVector{T}(undef,cones.numel) : ConicVector{T}(cones)
+        s = use_gpu ? CuVector{T}(undef,m) : Vector{T}(undef,m)
+        z = use_gpu ? CuVector{T}(undef,m) : Vector{T}(undef,m)
         τ = T(1)
         κ = T(1)
 
@@ -115,8 +135,8 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
     #to be treated as diagonal scaling data
     d::Vector{T}
     dinv::Vector{T}
-    e::ConicVector{T}
-    einv::ConicVector{T}
+    e::Vector{T}
+    einv::Vector{T}
 
     #overall scaling for objective function
     c::Base.RefValue{T}
@@ -128,22 +148,22 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
     einv_gpu::AbstractVector{T}    
 
     function DefaultEquilibration{T}(
-        nvars::Int,
-        cones::CompositeCone{T},
+        n::Int64,
+        m::Int64,
     ) where {T}
 
         #Left/Right diagonal scaling for problem data
-        d    = ones(T,nvars)
-        dinv = ones(T,nvars)
-        e    = ConicVector{T}(cones); e    .= one(T)
-        einv = ConicVector{T}(cones); einv .= one(T)
+        d    = ones(T,n)
+        dinv = ones(T,n)
+        e    = ones(T,m)
+        einv = ones(T,m)
 
         c    = Ref(T(1.))
 
         d_gpu = unsafe_wrap(CuArray{T,1},d)
         dinv_gpu = unsafe_wrap(CuArray{T,1},dinv)
-        e_gpu = unsafe_wrap(CuArray{T,1},e.vec)
-        einv_gpu = unsafe_wrap(CuArray{T,1},einv.vec)
+        e_gpu = unsafe_wrap(CuArray{T,1},e)
+        einv_gpu = unsafe_wrap(CuArray{T,1},einv)
 
         new(d,dinv,e,einv,c,d_gpu,dinv_gpu,e_gpu,einv_gpu)
     end
@@ -163,6 +183,7 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
     q::Vector{T}
     A::AbstractMatrix{T}
     b::Vector{T}
+    cones::Vector{SupportedCone}
     n::DefaultInt
     m::DefaultInt
     equilibration::DefaultEquilibration{T}
@@ -171,10 +192,11 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
     # during data updating to allow for multiple updates, and 
     # then recalculated during solve if needed
 
-    normq::Union{T,Nothing}  #unscaled inf norm of q
-    normb::Union{T,Nothing}  #unscaled inf norm of b
+    normq::Option{T}  #unscaled inf norm of q
+    normb::Option{T}  #unscaled inf norm of b
 
-    presolver::Presolver{T}
+    presolver::Option{Presolver{T}}
+    chordal_info::Option{ChordalInfo{T}}
 
     #YC: temporary GPU data
     P_gpu::Union{AbstractMatrix{T},Nothing}
@@ -182,58 +204,6 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
     A_gpu::Union{AbstractMatrix{T},Nothing}
     At_gpu::Union{AbstractMatrix{T},Nothing}
     b_gpu::Union{AbstractVector{T},Nothing}
-
-    function DefaultProblemData{T}(
-        P::AbstractMatrix{T},
-        q::AbstractVector{T},
-        A::AbstractMatrix{T},
-        b::AbstractVector{T},
-        cones::CompositeCone{T},
-        presolver::Presolver{T},
-        settings::Settings{T}
-    ) where {T}
-
-        # dimension checks will have already been
-        # performed during problem setup, so skip here
-
-        #take an internal copy of all problem
-        #data, since we are going to scale it
-        P = (!(settings.direct_kkt_solver) || settings.direct_solve_method == :cudss) ? SparseMatrixCSC(Symmetric(triu(P))) : triu(P);
-        q = deepcopy(q)
-
-        (A,b) = let  
-            map = presolver.reduce_map;  
-            if !isnothing(map)
-                (
-                    A[map.keep_logical,:],
-                    b[map.keep_logical]
-                )
-            else
-                (deepcopy(A),deepcopy(b))
-            end
-        end 
-
-        #cap entries in b at INFINITY.  This is important 
-        #for inf values that were not in a reduced cone
-        @. b .= min(b,T(presolver.infbound))
-
-        #this ensures m is the *reduced* size m
-        (m,n) = size(A)
-
-        equilibration = DefaultEquilibration{T}(n,cones)
-
-        normq = norm(q, Inf)
-        normb = norm(b, Inf)
-
-        P_gpu = nothing
-        q_gpu = nothing
-        A_gpu = nothing
-        At_gpu = nothing
-        b_gpu = nothing
-
-        new(P,q,A,b,n,m,equilibration,normq,normb,presolver,P_gpu,q_gpu,A_gpu,At_gpu,b_gpu)
-
-    end
 
 end
 
@@ -323,7 +293,7 @@ mutable struct DefaultSolution{T} <: AbstractSolution{T}
 
 end
 
-function DefaultSolution{T}(m,n,use_gpu::Bool) where {T <: AbstractFloat}
+function DefaultSolution{T}(n,m,use_gpu::Bool) where {T <: AbstractFloat}
 
     VecType = use_gpu ? CuVector : Vector
     x = VecType{T}(undef,n)
@@ -358,16 +328,16 @@ Initializes an empty Clarabel solver that can be filled with problem data using:
 """
 mutable struct Solver{T <: AbstractFloat} <: AbstractSolver{T}
 
-    data::Union{AbstractProblemData{T},Nothing}
-    variables::Union{AbstractVariables{T},Nothing}
+    data::Option{AbstractProblemData{T}}
+    variables::Option{AbstractVariables{T}}
     cones::Union{CompositeCone{T},CompositeConeGPU{T},Nothing}
-    residuals::Union{AbstractResiduals{T},Nothing}
-    kktsystem::Union{AbstractKKTSystem{T},Nothing}
-    info::Union{AbstractInfo{T},Nothing}
-    step_lhs::Union{AbstractVariables{T},Nothing}
-    step_rhs::Union{AbstractVariables{T},Nothing}
-    prev_vars::Union{AbstractVariables{T},Nothing}
-    solution::Union{AbstractSolution{T},Nothing}
+    residuals::Option{AbstractResiduals{T}}
+    kktsystem::Option{AbstractKKTSystem{T}}
+    info::Option{AbstractInfo{T}}
+    step_lhs::Option{AbstractVariables{T}}
+    step_rhs::Option{AbstractVariables{T}}
+    prev_vars::Option{AbstractVariables{T}}
+    solution::Option{AbstractSolution{T}}
     use_gpu::Union{Bool,Nothing}
     settings::Settings{T}
     timers::TimerOutput
@@ -400,3 +370,4 @@ function Solver{T}(d::Dict) where {T}
 end
 
 Solver(args...; kwargs...) = Solver{DefaultFloat}(args...; kwargs...)
+

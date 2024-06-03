@@ -12,7 +12,7 @@ Interior Point Conic Optimization for Julia
   <a href="https://codecov.io/gh/oxfordcontrol/Clarabel.jl"><img src="https://codecov.io/gh/oxfordcontrol/Clarabel.jl/branch/main/graph/badge.svg"></a>
   <a href="https://oxfordcontrol.github.io/ClarabelDocs/stable"><img src="https://img.shields.io/badge/Documentation-stable-purple.svg"></a>
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg"></a>
-  <a href="https://github.com/oxfordcontrol/Clarabel.jl/releases"><img src="https://img.shields.io/badge/Release-v0.7.1-blue.svg"></a>
+  <a href="https://github.com/oxfordcontrol/Clarabel.jl/releases"><img src="https://img.shields.io/badge/Release-v0.9.0-blue.svg"></a>
 </p>
 
 <p align="center">
@@ -59,5 +59,18 @@ Clarabel is also available in a Rust implementation with additional language int
 ## Installation
 - __Clarabel.jl__ can be added via the Julia package manager (type `]`): `pkg> add Clarabel`
 
+## Citing
+```
+@misc{Clarabel_2024,
+      title={Clarabel: An interior-point solver for conic programs with quadratic objectives}, 
+      author={Paul J. Goulart and Yuwen Chen},
+      year={2024},
+      eprint={2405.12762},
+      archivePrefix={arXiv},
+      primaryClass={math.OC}
+}
+```
+
 ## License 🔍
 This project is licensed under the Apache License  2.0 - see the [LICENSE.md](https://github.com/oxfordcontrol/Clarabel.jl/blob/main/LICENSE.md) file for details.
+

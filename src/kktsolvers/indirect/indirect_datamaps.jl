@@ -188,7 +188,7 @@ struct IndirectDataMap
     P::Vector{Int}
     A::Vector{Int}
     At::Vector{Int}        #YC: not sure whether we need it or not
-    Hsblocks::ConicHsblocks{Int}                #indices of the lower RHS blocks (by cone)
+    Hsblocks::Vector{Int}                #indices of the lower RHS blocks (by cone)
     sparse_maps::Vector{SparseExpansionFullMap}      #sparse cone expansion terms
 
     #all of above terms should be disjoint and their union
@@ -212,7 +212,7 @@ struct IndirectDataMap
         diagP  = zeros(Int,n)
 
         #make an index for each of the Hs blocks for each cone
-        Hsblocks = _allocate_full_kkt_Hsblocks(Int, cones)
+        Hsblocks = _allocate_kkt_Hsblocks(Int, cones)
 
         #now do the sparse cone expansion pieces
         nsparse = count(cone->(@conedispatch is_sparse_expandable(cone)),cones)

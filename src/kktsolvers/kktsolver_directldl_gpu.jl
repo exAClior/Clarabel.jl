@@ -80,8 +80,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         _fill_Dsigns!(Dsigns_cpu,m,n,mapcpu)       #This is run on CPU
         Dsigns = CuVector(Dsigns_cpu)
 
-        Hsblockscpu = _allocate_full_kkt_Hsblocks(T, cones)
-        Hsblocks = CuVector(Hsblockscpu.vec)
+        Hsblocks = CuVector(_allocate_kkt_Hsblocks(T, cones))
 
         diagonal_regularizer = zero(T)
 

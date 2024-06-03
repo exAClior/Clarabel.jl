@@ -27,7 +27,7 @@ struct GPUDataMap
         diagP  = unsafe_wrap(CuArray,mapcpu.diagP)
 
         #make an index for each of the Hs blocks for each cone
-        Hsblocks = CuVector{Cint}(mapcpu.Hsblocks.vec)
+        Hsblocks = CuVector{Cint}(mapcpu.Hsblocks)
 
         #YC: disable sparse cone expansion at present
         # #now do the sparse cone expansion pieces

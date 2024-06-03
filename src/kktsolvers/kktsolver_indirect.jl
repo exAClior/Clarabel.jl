@@ -27,7 +27,7 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
 
     # a vector for storing the Hs blocks
     # on the in the KKT matrix block diagonal
-    Hsblocks::ConicHsblocks{T}
+    Hsblocks::Vector{T}
     cones::CompositeCone{T}
 
     #unpermuted KKT matrix
@@ -78,7 +78,7 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
         dim = m + n + p
         A = KKT[n+1:dim,1:n]
 
-        Hsblocks = _allocate_full_kkt_Hsblocks(T, cones)
+        Hsblocks = _allocate_kkt_Hsblocks(T, cones)
 
         M = preconditionerT{T,Vectype}(m,n,KKT)
 
