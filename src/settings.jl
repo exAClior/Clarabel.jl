@@ -69,19 +69,19 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     max_step_fraction::T    = 0.99
 
     # full accuracy solution tolerances
-    tol_gap_abs::T          = 1e-6
-    tol_gap_rel::T          = 1e-6
-    tol_feas::T             = 1e-6
-	tol_infeas_abs::T		= 1e-6
-	tol_infeas_rel::T		= 1e-6
-    tol_ktratio::T          = 1e-4
+    tol_gap_abs::T          = 1e-8
+    tol_gap_rel::T          = 1e-8
+    tol_feas::T             = 1e-8
+	tol_infeas_abs::T		= 1e-8
+	tol_infeas_rel::T		= 1e-8
+    tol_ktratio::T          = 1e-6
 
     # reduced accuracy solution tolerances
-    reduced_tol_gap_abs::T          = 1e-4
-    reduced_tol_gap_rel::T          = 1e-4
+    reduced_tol_gap_abs::T          = 5e-5
+    reduced_tol_gap_rel::T          = 5e-5
     reduced_tol_feas::T             = 1e-4
-    reduced_tol_infeas_abs::T		= 1e-4
-	reduced_tol_infeas_rel::T		= 1e-4
+    reduced_tol_infeas_abs::T		= 5e-5
+	reduced_tol_infeas_rel::T		= 5e-5
     reduced_tol_ktratio::T          = 1e-4
 
 	#data equilibration
@@ -92,12 +92,12 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
 
     #cones and line search parameters
     linesearch_backtrack_step::T        = 0.8     
-    min_switch_step_length::T           = 1e-1   
+    min_switch_step_length::T           = 1e-2   
     min_terminate_step_length::T        = 1e-4    
 
     #the direct linear solver to use
     #can be :qdldl or :mkl
-    direct_kkt_solver::Bool             = false
+    direct_kkt_solver::Bool             = true
     direct_solve_method::Symbol         = :qdldl
     
     # indirect solve method
@@ -125,7 +125,7 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     #preprocessing 
     presolve_enable::Bool               = true
 
-    # device: can be :cpu or :gpu_cuda
+    # device: can be :cpu or :gpu
     device::Symbol                      = :cpu
     preconditioner                      = 1         #partial preconditioner
 
