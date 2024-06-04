@@ -57,31 +57,12 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     #step_size
     α::AbstractVector{T}
 
-    function CompositeConeGPU{T}(cone_specs::Vector{SupportedCone}) where {T}
+    function CompositeConeGPU{T}(cpucones::CompositeCone{T}) where {T}
 
-        ncones = length(cone_specs)
-        cones  = AbstractCone{T}[]
-        sizehint!(cones,ncones)
-
-        type_counts = Dict{Type,Cint}()
-
-        #assumed symmetric to start
-        _is_symmetric = true
-
-        #create cones with the given dims
-        for coneT in cone_specs
-            #make a new cone
-            cone = make_cone(T, coneT);
-
-            #update global problem symmetry
-            _is_symmetric = _is_symmetric && is_symmetric(cone)
-
-            #increment type counts 
-            key = ConeDict[typeof(coneT)]
-            haskey(type_counts,key) ? type_counts[key] += 1 : type_counts[key] = 1
-            
-            push!(cones,cone)
-        end
+        #Information from the CompositeCone on CPU 
+        cones  = cpucones.cones
+        type_counts = cpucones.type_counts
+        _is_symmetric = cpucones._is_symmetric
 
         n_zero = haskey(type_counts,ZeroCone) ? type_counts[ZeroCone] : 0
         n_nn = haskey(type_counts,NonnegativeCone) ? type_counts[NonnegativeCone] : 0
@@ -93,23 +74,16 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         idx_eq = Vector{Cint}([])
         idx_inq = Vector{Cint}([])
         for i in 1:n_linear
-            typeof(cone_specs[i]) == ZeroConeT ? push!(idx_eq,i) : push!(idx_inq,i) 
+            typeof(cones[i]) === ZeroCone{T} ? push!(idx_eq,i) : push!(idx_inq,i) 
         end
 
         #count up elements and degree
         numel  = sum(cone -> Clarabel.numel(cone), cones; init = 0)
         degree = sum(cone -> Clarabel.degree(cone), cones; init = 0)
 
-        #ranges for the subvectors associated with each cone,
-        #and the range for the corresponding entries
-        #in the Hs sparse block
-
-        rng_cones_cpu  = collect(UnitRange{Cint},rng_cones_iterator(cones));
-        rng_blocks_cpu = collect(UnitRange{Cint},rng_blocks_iterator(cones,true));
-
-        numel_linear  = sum(cone -> Clarabel.numel(cone), cones[1:n_linear]; init = 0)
-        max_linear = maximum(cone -> Clarabel.numel(cone), cones[1:n_linear]; init = 0)
-        numel_soc  = sum(cone -> Clarabel.numel(cone), cones[n_linear+1:n_linear+n_soc]; init = 0)
+        @views numel_linear  = sum(cone -> Clarabel.numel(cone), cones[1:n_linear]; init = 0)
+        @views max_linear = maximum(cone -> Clarabel.numel(cone), cones[1:n_linear]; init = 0)
+        @views numel_soc  = sum(cone -> Clarabel.numel(cone), cones[n_linear+1:n_linear+n_soc]; init = 0)
 
         w = CuVector{T}(undef,numel_linear+numel_soc)
         λ = CuVector{T}(undef,numel_linear+numel_soc)
@@ -130,7 +104,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
 
         α = CuVector{T}(undef,max(max_linear,n_soc,n_exp,n_pow)) #workspace for step size calculation
 
-        return new(cones,type_counts,numel,degree,CuVector(rng_cones_cpu),CuVector(rng_blocks_cpu),_is_symmetric,
+        return new(cones,type_counts,numel,degree,CuVector(cpucones.rng_cones),CuVector(cpucones.rng_blocks),_is_symmetric,
                 n_linear,idx_eq,idx_inq,
                 w,λ,η,
                 αp,H_dual,Hs,grad,

@@ -85,7 +85,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         diagonal_regularizer = zero(T)
 
         #the indirect linear solver engine
-        GPUsolver = GPUsolverT{T}(KKTgpu,A,settings)
+        GPUsolver = GPUsolverT{T}(KKTgpu,x,b)
 
         return new(m,n,p,x,b,
                    work1,work2,mapcpu,mapgpu,

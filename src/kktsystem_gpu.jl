@@ -26,14 +26,11 @@ mutable struct DefaultKKTSystemGPU{T} <: AbstractKKTSystem{T}
         function DefaultKKTSystemGPU{T}(
             data::DefaultProblemData{T},
             cones::CompositeCone{T},
-            settings::Settings{T},
-            use_gpu::Bool
+            settings::Settings{T}
         ) where {T}
 
         #basic problem dimensions
         (m, n) = (data.m, data.n)
-
-        @assert(use_gpu)
 
         kktsolver = GPULDLKKTSolver{T}(data.P,data.A,cones,m,n,settings)
 
@@ -47,10 +44,10 @@ mutable struct DefaultKKTSystemGPU{T} <: AbstractKKTSystem{T}
 
         #workspace compatible with (x,z)
         workx   = CuVector{T}(undef,n)
-        workz   = CuVector{T}(undef,cones.numel)
+        workz   = CuVector{T}(undef,m)
 
         #additional conic workspace vector compatible with s and z
-        work_conic = CuVector{T}(undef,cones.numel)
+        work_conic = CuVector{T}(undef,m)
 
         workx2 = CuVector{T}(undef,n)
 

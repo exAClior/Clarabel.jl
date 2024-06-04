@@ -10,7 +10,7 @@ struct CUDSSDirectLDLSolver{T} <: AbstractGPUSolver{T}
     b::AbstractVector{T}
     
 
-    function CUDSSDirectLDLSolver{T}(KKT::AbstractSparseMatrix{T},Dsigns,settings) where {T}
+    function CUDSSDirectLDLSolver{T}(KKT::AbstractSparseMatrix{T},x,b) where {T}
 
         dim = LinearAlgebra.checksquare(KKT)
 
@@ -19,8 +19,6 @@ struct CUDSSDirectLDLSolver{T} <: AbstractGPUSolver{T}
 
         KKTgpu = KKT
         cudssSolver = CUDSS.CudssSolver(KKTgpu, "S", 'F')
-        x = CuVector(zeros(T, dim))
-        b = CuVector(zeros(T, dim))
 
         cudss("analysis", cudssSolver, x, b)
         cudss("factorization", cudssSolver, x, b)

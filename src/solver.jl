@@ -108,7 +108,7 @@ function setup!(
         end 
 
         cpucones  = CompositeCone{T}(s.data.cones,use_full)
-        s.cones  = use_gpu ? CompositeConeGPU{T}(s.data.cones) : cpucones
+        s.cones  = use_gpu ? CompositeConeGPU{T}(cpucones) : cpucones
 
         s.data.m == s.cones.numel || throw(DimensionMismatch())
 
@@ -125,7 +125,7 @@ function setup!(
         @timeit s.timers "kkt init" begin
             if use_gpu
                 gpu_data_copy!(s.data)  #YC: copy data to GPU, should be optimized later
-                s.kktsystem = DefaultKKTSystemGPU{T}(s.data,cpucones,s.settings,use_gpu)
+                s.kktsystem = DefaultKKTSystemGPU{T}(s.data,cpucones,s.settings)
             else
                 s.kktsystem = DefaultKKTSystem{T}(s.data,s.cones,s.settings)
             end
