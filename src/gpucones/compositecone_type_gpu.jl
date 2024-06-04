@@ -26,7 +26,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     cones::AbstractVector{AbstractCone{T}}  
 
     #count of each cone type
-    type_counts::Dict{Type,AbstractVector{Cint}}
+    type_counts::Dict{Type,Cint}
 
     #overall size of the composite cone
     numel::Cint
@@ -39,9 +39,9 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     # the flag for symmetric cone check
     _is_symmetric::Bool
     n_linear::Cint
-    n_soc::Cint
-    n_exp::Cint
-    n_pow::Cint
+
+    idx_eq::Vector{Cint}
+    idx_inq::Vector{Cint}
 
     #data
     w::AbstractVector{T}
@@ -63,13 +63,13 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         cones  = AbstractCone{T}[]
         sizehint!(cones,ncones)
 
-        type_counts = Dict{Type,CuVector{Cint}}()
+        type_counts = Dict{Type,Cint}()
 
         #assumed symmetric to start
         _is_symmetric = true
 
         #create cones with the given dims
-        CUDA.@allowscalar for (i,coneT) in enumerate(cone_specs)
+        for coneT in cone_specs
             #make a new cone
             cone = make_cone(T, coneT);
 
@@ -78,16 +78,20 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
 
             #increment type counts 
             key = ConeDict[typeof(coneT)]
-            haskey(type_counts,key) ? push!(type_counts[key],i) : type_counts[key] = CuVector([i])
+            haskey(type_counts,key) ? type_counts[key] += 1 : type_counts[key] = 1
             
             push!(cones,cone)
         end
 
-        #Fill in nonexisting type_counts
-        for key in values(ConeDict)
-            if !haskey(type_counts,key) 
-                type_counts[key] = CuVector{Cint}([])
-            end
+        n_linear = type_counts[ZeroCone] + type_counts[NonnegativeCone]
+        n_soc = haskey(type_counts,SecondOrderCone) ? type_counts[SecondOrderCone] : 0
+        n_exp = haskey(type_counts,ExponentialCone) ? type_counts[ExponentialCone] : 0
+        n_pow = haskey(type_counts,PowerCone) ? type_counts[PowerCone] : 0
+        #idx set for eq and ineq constraints
+        idx_eq = Vector{Cint}([])
+        idx_inq = Vector{Cint}([])
+        for i in 1:n_linear
+            typeof(cone_specs[i]) == ZeroConeT ? push!(idx_eq,i) : push!(idx_inq,i) 
         end
 
         #count up elements and degree
@@ -100,13 +104,6 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
 
         rng_cones_cpu  = collect(UnitRange{Cint},rng_cones_iterator(cones));
         rng_blocks_cpu = collect(UnitRange{Cint},rng_blocks_iterator(cones,true));
-
-        n_zero = haskey(type_counts,ZeroCone) ? length(type_counts[ZeroCone]) : 0
-        n_nonnegative = haskey(type_counts,NonnegativeCone) ? length(type_counts[NonnegativeCone]) : 0
-        n_linear = n_zero + n_nonnegative
-        n_soc = haskey(type_counts,SecondOrderCone) ? length(type_counts[SecondOrderCone]) : 0
-        n_exp = haskey(type_counts,ExponentialCone) ? length(type_counts[ExponentialCone]) : 0
-        n_pow = haskey(type_counts,PowerCone) ? length(type_counts[PowerCone]) : 0
 
         numel_linear  = sum(cone -> Clarabel.numel(cone), cones[1:n_linear]; init = 0)
         max_linear = maximum(cone -> Clarabel.numel(cone), cones[1:n_linear]; init = 0)
@@ -132,7 +129,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         α = CuVector{T}(undef,max(max_linear,n_soc,n_exp,n_pow)) #workspace for step size calculation
 
         return new(cones,type_counts,numel,degree,CuVector(rng_cones_cpu),CuVector(rng_blocks_cpu),_is_symmetric,
-                n_linear,n_soc,n_exp,n_pow,
+                n_linear,idx_eq,idx_inq,
                 w,λ,η,
                 αp,H_dual,Hs,grad,
                 α)
@@ -157,8 +154,8 @@ Base.IndexStyle(S::CompositeConeGPU{T}) where{T} = IndexStyle(S.cones)
 
 function get_type_count(cones::CompositeConeGPU{T}, type::Type) where {T}
     if haskey(cones.type_counts,type)
-        return length(cones.type_counts[type])
+        return cones.type_counts[type]
     else
-        return 0
+        return Cint(0)
     end
 end

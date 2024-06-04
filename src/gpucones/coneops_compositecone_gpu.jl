@@ -53,13 +53,13 @@ function margins(
     β = zero(T)
 
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
+    n_soc = get_type_count(cones,SecondOrderCone)
     rng_cones = cones.rng_cones
-    type_counts = cones.type_counts
+
     α = cones.α
     @. α = αmin
     
-    CUDA.@allowscalar for i in type_counts[NonnegativeCone]
+    CUDA.@allowscalar for i in cones.idx_inq
         rng_cone_i = rng_cones[i]
         @views zi = z[rng_cone_i]
         len = length(zi)
@@ -94,16 +94,15 @@ function scaled_unit_shift!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
+    n_soc = get_type_count(cones,SecondOrderCone)
     rng_cones = cones.rng_cones
-    type_counts = cones.type_counts
 
     CUDA.@allowscalar begin
-        for i in type_counts[ZeroCone]
+        for i in cones.idx_eq
             rng_cone_i = rng_cones[i]
             @views scaled_unit_shift_zero!(z[rng_cone_i],pd)
         end
-        for i in type_counts[NonnegativeCone]
+        for i in cones.idx_inq
             rng_cone_i = rng_cones[i]
             @views scaled_unit_shift_nonnegative!(z[rng_cone_i],α)
         end
@@ -136,19 +135,18 @@ function unit_initialization!(
     # return nothing
 
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
-    n_exp = cones.n_exp
-    n_pow = cones.n_pow
+    n_soc = get_type_count(cones,SecondOrderCone)
+    n_exp = get_type_count(cones,ExponentialCone)
+    n_pow = get_type_count(cones,PowerCone)
     αp = cones.αp
     rng_cones = cones.rng_cones
-    type_counts = cones.type_counts
 
     CUDA.@allowscalar begin
-        for i in type_counts[ZeroCone]
+        for i in cones.idx_eq
             rng_cone_i = rng_cones[i]
             @views unit_initialization_zero!(z[rng_cone_i],s[rng_cone_i])
         end
-        for i in type_counts[NonnegativeCone]
+        for i in cones.idx_inq
             rng_cone_i = rng_cones[i]
             @views unit_initialization_nonnegative!(z[rng_cone_i],s[rng_cone_i])
         end
@@ -193,13 +191,12 @@ function set_identity_scaling!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
+    n_soc = get_type_count(cones,SecondOrderCone)
     rng_cones = cones.rng_cones
-    type_counts = cones.type_counts
     w = cones.w
     η = cones.η
     
-    CUDA.@allowscalar for i in type_counts[NonnegativeCone]
+    CUDA.@allowscalar for i in cones.idx_inq
         @views set_identity_scaling_nonnegative!(w[rng_cones[i]])
     end
 
@@ -224,21 +221,20 @@ function update_scaling!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
-    n_exp = cones.n_exp
-    n_pow = cones.n_pow
+    n_soc = get_type_count(cones,SecondOrderCone)
+    n_exp = get_type_count(cones,ExponentialCone)
+    n_pow = get_type_count(cones,PowerCone)
     αp = cones.αp
     grad = cones.grad
     Hs = cones.Hs
     H_dual = cones.H_dual
     rng_cones = cones.rng_cones
-    type_counts = cones.type_counts
     w = cones.w
     λ = cones.λ
     η = cones.η
     is_scaling_success = true
     
-    CUDA.@allowscalar for i in type_counts[NonnegativeCone]
+    CUDA.@allowscalar for i in cones.idx_inq
         @views is_scaling_success = update_scaling_nonnegative!(s[rng_cones[i]],z[rng_cones[i]],w[rng_cones[i]],λ[rng_cones[i]])
 
         if !is_scaling_success
@@ -285,20 +281,19 @@ function get_Hs!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
-    n_exp = cones.n_exp
-    n_pow = cones.n_pow
+    n_soc = get_type_count(cones,SecondOrderCone)
+    n_exp = get_type_count(cones,ExponentialCone)
+    n_pow = get_type_count(cones,PowerCone)
     Hs = cones.Hs
-    type_counts = cones.type_counts
     rng_blocks = cones.rng_blocks
     rng_cones = cones.rng_cones
     w = cones.w
 
     CUDA.@allowscalar begin
-        for i in type_counts[ZeroCone]
+        for i in cones.idx_eq
             @views get_Hs_zero!(Hsblocks[rng_blocks[i]])
         end
-        for i in type_counts[NonnegativeCone]
+        for i in cones.idx_inq
             @views get_Hs_nonnegative!(Hsblocks[rng_blocks[i]],w[rng_cones[i]])
         end
         CUDA.synchronize()
@@ -347,18 +342,19 @@ function mul_Hs!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
+    n_soc = get_type_count(cones,SecondOrderCone)
+    n_exp = get_type_count(cones,ExponentialCone)
+    n_pow = get_type_count(cones,PowerCone)
     Hs = cones.Hs
-    type_counts = cones.type_counts
     rng_cones = cones.rng_cones
     w = cones.w
     η = cones.η
 
     CUDA.@allowscalar begin
-        for i in type_counts[ZeroCone]
+        for i in cones.idx_eq
             @views mul_Hs_zero!(y[rng_cones[i]])
         end
-        for i in type_counts[NonnegativeCone]
+        for i in cones.idx_inq
             @views mul_Hs_nonnegative!(y[rng_cones[i]],x[rng_cones[i]],w[rng_cones[i]])
         end
         CUDA.synchronize()
@@ -373,7 +369,7 @@ function mul_Hs!(
         CUDA.@sync kernel(y,x,w,η,rng_cones,n_linear,n_soc; threads, blocks)
     end
 
-    n_nonsymmetric = cones.n_exp + cones.n_pow
+    n_nonsymmetric = n_exp + n_pow
     if n_nonsymmetric > 0
         n_shift = n_linear+n_soc
         kernel = @cuda launch=false _kernel_mul_Hs_nonsymmetric!(y,Hs,x,rng_cones,n_shift,n_nonsymmetric)
@@ -393,17 +389,19 @@ function affine_ds!(
     ds::AbstractVector{T},
     s::AbstractVector{T}
 ) where {T}
+
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
-    type_counts = cones.type_counts
+    n_soc = get_type_count(cones,SecondOrderCone)
+    n_exp = get_type_count(cones,ExponentialCone)
+    n_pow = get_type_count(cones,PowerCone)
     rng_cones = cones.rng_cones
     λ = cones.λ
 
     CUDA.@allowscalar begin
-        for i in type_counts[ZeroCone]
+        for i in cones.idx_eq
             @views affine_ds_zero!(ds[rng_cones[i]])
         end
-        for i in type_counts[NonnegativeCone]
+        for i in cones.idx_inq
             @views affine_ds_nonnegative!(ds[rng_cones[i]],λ[rng_cones[i]])
         end
         CUDA.synchronize()
@@ -419,7 +417,7 @@ function affine_ds!(
     end
 
     #update nonsymmetric cones
-    if cones.n_exp+cones.n_pow > 0
+    if n_exp+n_pow > 0
         start_ind = length(cones.w)+1
 
         @. ds[start_ind:end] = s[start_ind:end]
@@ -439,22 +437,21 @@ function combined_ds_shift!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
-    n_exp = cones.n_exp
-    n_pow = cones.n_pow
+    n_soc = get_type_count(cones,SecondOrderCone)
+    n_exp = get_type_count(cones,ExponentialCone)
+    n_pow = get_type_count(cones,PowerCone)
     grad = cones.grad
     H_dual = cones.H_dual
     αp = cones.αp
-    type_counts = cones.type_counts
     rng_cones = cones.rng_cones
     w = cones.w
     η = cones.η
 
     CUDA.@allowscalar begin
-        for i in type_counts[ZeroCone]
+        for i in cones.idx_eq
             @views combined_ds_shift_zero!(shift[rng_cones[i]])
         end
-        for i in type_counts[NonnegativeCone]
+        for i in cones.idx_inq
             @views combined_ds_shift_nonnegative!(shift[rng_cones[i]],step_z[rng_cones[i]],step_s[rng_cones[i]],w[rng_cones[i]],σμ)
         end
         CUDA.synchronize()
@@ -502,18 +499,19 @@ function Δs_from_Δz_offset!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = cones.n_soc
-    type_counts = cones.type_counts
+    n_soc = get_type_count(cones,SecondOrderCone)
+    n_exp = get_type_count(cones,ExponentialCone)
+    n_pow = get_type_count(cones,PowerCone)
     rng_cones = cones.rng_cones
     w = cones.w
     λ = cones.λ
     η = cones.η
 
     CUDA.@allowscalar begin
-        for i in type_counts[ZeroCone]
+        for i in cones.idx_eq
             @views Δs_from_Δz_offset_zero!(out[rng_cones[i]])
         end
-        for i in type_counts[NonnegativeCone]
+        for i in cones.idx_inq
             @views Δs_from_Δz_offset_nonnegative!(out[rng_cones[i]],ds[rng_cones[i]],z[rng_cones[i]])
         end
         CUDA.synchronize()
@@ -528,7 +526,7 @@ function Δs_from_Δz_offset!(
         CUDA.@sync kernel(out,ds,z,w,λ,η,rng_cones,n_linear,n_soc; threads, blocks)
     end
 
-    if cones.n_exp+cones.n_pow > 0
+    if n_exp+n_pow > 0
         start_ind = length(w)+1
         @. out[start_ind:end] = ds[start_ind:end]
         CUDA.synchronize()
@@ -548,11 +546,10 @@ function step_length(
       αmax::T,
 ) where {T}
 
-    n_linear        = cones.n_linear
-    n_soc           = cones.n_soc
-    n_exp           = cones.n_exp
-    n_pow           = cones.n_pow
-    type_counts     = cones.type_counts
+    n_linear = cones.n_linear
+    n_soc = get_type_count(cones,SecondOrderCone)
+    n_exp = get_type_count(cones,ExponentialCone)
+    n_pow = get_type_count(cones,PowerCone)
     rng_cones       = cones.rng_cones
     α               = cones.α
     αp              = cones.αp
@@ -560,7 +557,7 @@ function step_length(
     CUDA.@sync @. α = αmax          #Initialize step size
 
     CUDA.@allowscalar begin
-        for i in type_counts[NonnegativeCone]
+        for i in cones.idx_inq
             len_nn = Cint(length(rng_cones[i]))
             rng_cone_i = rng_cones[i]
             @views αi = step_length_nonnegative(dz[rng_cone_i],ds[rng_cone_i],z[rng_cone_i],s[rng_cone_i],α[1:len_nn],len_nn,αmax)
