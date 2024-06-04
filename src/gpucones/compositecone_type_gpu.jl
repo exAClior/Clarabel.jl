@@ -83,7 +83,9 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
             push!(cones,cone)
         end
 
-        n_linear = type_counts[ZeroCone] + type_counts[NonnegativeCone]
+        n_zero = haskey(type_counts,ZeroCone) ? type_counts[ZeroCone] : 0
+        n_nn = haskey(type_counts,NonnegativeCone) ? type_counts[NonnegativeCone] : 0
+        n_linear = n_zero + n_nn
         n_soc = haskey(type_counts,SecondOrderCone) ? type_counts[SecondOrderCone] : 0
         n_exp = haskey(type_counts,ExponentialCone) ? type_counts[ExponentialCone] : 0
         n_pow = haskey(type_counts,PowerCone) ? type_counts[PowerCone] : 0
