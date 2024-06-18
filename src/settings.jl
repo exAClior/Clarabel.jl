@@ -134,6 +134,9 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     chordal_decomposition_compact::Bool = true
     chordal_decomposition_complete_dual::Bool = true
 
+    #centrality check
+    neighborhood                        = 1e-6
+
     # device: can be :cpu or :gpu
     device::Symbol                      = :cpu
     preconditioner                      = 1         #partial preconditioner

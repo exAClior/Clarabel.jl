@@ -71,6 +71,31 @@ function variables_barrier(
     return barrier
 end
 
+function shadow_centrality_check(
+    variables::DefaultVariables{T},
+    step::DefaultVariables{T},
+    α::T,
+    cones::Union{CompositeCone{T},CompositeConeGPU{T}},
+    thr::T
+) where {T}
+
+    central_coef = cones.degree + 1
+
+    cur_τ = variables.τ + α*step.τ
+    cur_κ = variables.κ + α*step.κ
+
+    # compute current μ
+    sz = dot_shifted(variables.z,variables.s,step.z,step.s,α)
+    μ = (sz + cur_τ*cur_κ)/central_coef
+
+    ( z, s) = (variables.z, variables.s)
+    (dz,ds) = (step.z, step.s)
+
+    centrality = check_neighborhood(cones, z, s, dz, ds, α, μ,thr)
+
+    return centrality
+end
+
 function variables_copy_from(dest::DefaultVariables{T},src::DefaultVariables{T},use_gpu::Bool) where {T}
     dest.x .= src.x
     dest.s .= src.s

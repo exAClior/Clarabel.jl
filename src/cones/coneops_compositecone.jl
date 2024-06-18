@@ -266,3 +266,26 @@ function compute_barrier(
     return barrier
 end
 
+function check_neighborhood(
+    cones::CompositeCone{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},  
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    μ::T,
+    thr::T
+) where {T}
+
+    centrality = true
+    for (cone,rng) in zip(cones,cones.rng_cones)
+        zi = view(z,rng)
+        si = view(s,rng)
+        dzi = view(dz,rng)
+        dsi = view(ds,rng)
+        @conedispatch  centrality = check_neighborhood(cone,zi,si,dzi,dsi,α,μ,thr)
+        centrality ? continue : return false
+    end
+
+    return true
+end

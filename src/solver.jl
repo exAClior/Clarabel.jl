@@ -411,9 +411,10 @@ function solver_get_step_length(s::Solver{T},steptype::Symbol,scaling::ScalingSt
 
     #YC: not implemented for GPU at the moment
     # additional barrier function limits for asymmetric cones
-    if (!use_gpu && !is_symmetric(s.cones) && steptype == :combined && scaling == Dual)
+    if (!use_gpu && !is_symmetric(s.cones) && steptype == :combined)
         αinit = α
-        α = solver_backtrack_step_to_barrier(s,αinit)
+        # α = solver_backtrack_step_to_barrier(s,αinit)
+        α = solver_backtrack_step_to_centrality(s,αinit)
     end
     return α
 end
@@ -439,6 +440,31 @@ function solver_backtrack_step_to_barrier(
     return α
 end
 
+# check the distance to the boundary for asymmetric cones
+function solver_backtrack_step_to_centrality(
+    s::Solver{T}, αinit::T
+) where {T}
+
+    step = s.settings.linesearch_backtrack_step
+    α_min = s.settings.min_terminate_step_length
+
+    α = αinit
+
+    for j = 1:50
+        centrality = shadow_centrality_check(s.variables,s.step_lhs,α,s.cones,s.settings.neighborhood) 
+
+        if centrality
+            return α
+        else
+            if (α *= step) < α_min
+                α = zero(T)
+                break
+            end
+        end
+    end
+
+    return α
+end
 
 # Mehrotra heuristic
 function _calc_centering_parameter(α::T) where{T}

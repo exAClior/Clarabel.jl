@@ -160,10 +160,10 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
 
         c    = Ref(T(1.))
 
-        d_gpu = unsafe_wrap(CuArray{T,1},d)
-        dinv_gpu = unsafe_wrap(CuArray{T,1},dinv)
-        e_gpu = unsafe_wrap(CuArray{T,1},e)
-        einv_gpu = unsafe_wrap(CuArray{T,1},einv)
+        d_gpu = n > 0 ? unsafe_wrap(CuArray{T,1},d) : CUDA.zeros(T,0)
+        dinv_gpu = n > 0 ? unsafe_wrap(CuArray{T,1},dinv) : CUDA.zeros(T,0)
+        e_gpu = m > 0 ? unsafe_wrap(CuArray{T,1},e) : CUDA.zeros(T,0)
+        einv_gpu = m > 0 ? unsafe_wrap(CuArray{T,1},einv) : CUDA.zeros(T,0)
 
         new(d,dinv,e,einv,c,d_gpu,dinv_gpu,e_gpu,einv_gpu)
     end

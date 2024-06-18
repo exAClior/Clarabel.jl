@@ -25,7 +25,7 @@ struct CompositeCone{T} <: AbstractCone{T}
     # the flag for symmetric cone check
     _is_symmetric::Bool
 
-    function CompositeCone{T}(cone_specs::Vector{SupportedCone},use_full::Bool) where {T}
+    function CompositeCone{T}(cone_specs::Vector{SupportedCone},use_gpu::Bool) where {T}
 
         cones  = sizehint!(AbstractCone{T}[],length(cone_specs))
 
@@ -49,6 +49,11 @@ struct CompositeCone{T} <: AbstractCone{T}
             push!(cones,cone)
         end
 
+        #No GPU support for PSD cones at present
+        if use_gpu 
+            @assert(!haskey(type_counts,PSDTriangleCone))
+        end 
+
         #count up elements and degree
         numel  = sum(cone -> Clarabel.numel(cone), cones; init = 0)
         degree = sum(cone -> Clarabel.degree(cone), cones; init = 0)
@@ -58,7 +63,7 @@ struct CompositeCone{T} <: AbstractCone{T}
         #in the Hs sparse block
 
         rng_cones  = collect(rng_cones_iterator(cones));
-        rng_blocks = collect(rng_blocks_iterator(cones,use_full));
+        rng_blocks = collect(rng_blocks_iterator(cones,use_gpu));
 
         obj = new(cones,type_counts,numel,degree,rng_cones,rng_blocks,_is_symmetric)
     end
@@ -104,8 +109,8 @@ function rng_cones_iterator(cones::Vector{AbstractCone{T}}) where{T}
     RangeConesIterator(cones)
 end
 
-function rng_blocks_iterator(cones::Vector{AbstractCone{T}},use_full) where{T}
-    use_full ? RangeBlocksIteratorFull(cones) : RangeBlocksIterator(cones)
+function rng_blocks_iterator(cones::Vector{AbstractCone{T}},use_gpu) where{T}
+    use_gpu ? RangeBlocksIteratorFull(cones) : RangeBlocksIterator(cones)
 end
 
 Base.length(iter::RangeConesIterator) =  length(iter.cones)

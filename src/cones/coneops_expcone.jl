@@ -297,6 +297,25 @@ function gradient_primal(
 
 end
 
+function gradient_dual(
+    K::ExponentialCone{T},
+    z::Union{AbstractVector{T}, NTuple{3,T}},
+) where {T}
+
+    l = logsafe(-z[3]/z[1])
+    r = -z[1]*l-z[1]+z[2]
+
+    # compute the gradient at z
+    c2 = one(T)/r
+
+    g1 = c2*l - 1/z[1]
+    g2 = -c2
+    g3 = (c2*z[1]-1)/z[3]
+
+    SVector(g1,g2,g3)
+
+end
+
 # 3rd-order correction at the point z.  Output is η.
 #
 # η = -0.5*[(dot(u,Hψ,v)*ψ - 2*dotψu*dotψv)/(ψ*ψ*ψ)*gψ + 
@@ -399,7 +418,39 @@ function update_dual_grad_H(
     return nothing
 end
 
+function check_neighborhood(
+    K::ExponentialCone{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},  
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    μ::T,
+    thr::T
+) where {T}   
 
+    work = similar(K.grad) 
+    work .= zero(T)
+    @. work = s+α*ds
+    g = similar(K.grad) 
+    g .= zero(T)
+    @. g = z+α*dz
+    cur_μ = dot(work,g)
+    cur_μ = μ
+
+    #overwrite g with the new gradient
+    gradz = gradient_dual(K,g)
+    grads = gradient_primal(K,work) 
+    
+    μt = dot(gradz,grads)    
+    neighbourhood = degree(K)/(μt*cur_μ)
+    # println("neighbourhood is ", neighbourhood, " with thr ", thr)
+    if (neighbourhood < thr)
+        return false
+    end
+
+    return true
+end
 
 # ω(z) is the Wright-Omega function
 # Computes the value ω(z) defined as the solution y to

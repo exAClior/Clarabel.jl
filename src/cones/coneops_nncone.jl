@@ -189,6 +189,31 @@ function compute_barrier(
     return barrier
 end
 
+function check_neighborhood(
+    K::NonnegativeCone{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},  
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    μ::T,
+    thr::T
+) where {T}
+
+    μt = zero(T)
+    @inbounds for i in 1:K.dim
+        μt += inv((z[i]+α*dz[i])*(s[i]+α*ds[i]))    
+    end
+
+    neighbourhood = degree(K)/(μt*μ)
+
+    if (neighbourhood < thr)
+        return false
+    end
+
+    return true
+end
+
 # ---------------------------------------------
 # operations supported by symmetric cones only 
 # ---------------------------------------------

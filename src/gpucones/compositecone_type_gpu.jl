@@ -5,21 +5,6 @@ using CUDA, CUDA.CUSPARSE
 # operations on a compound set, including
 # conewise scaling operations
 # -------------------------------------
-@enum ConeType begin
-    ZEROCONE           = zero(Cint)
-    NONNEGATIVECONE
-    SECONDORDERCONE
-    EXPONENTIALCONE
-    POWERCONE
-end
-
-const ConeTypeDict = Dict{DataType,Cint}(
-           ZeroConeT => 0,
-    NonnegativeConeT => 1,
-    SecondOrderConeT => 2,
-    ExponentialConeT => 3,
-          PowerConeT => 4
-)
 
 struct CompositeConeGPU{T} <: AbstractCone{T}
     #YC: redundant CPU data, need to be removed later
