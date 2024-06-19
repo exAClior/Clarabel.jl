@@ -43,6 +43,7 @@ min\\_terminate\\_step\\_length         | 1e-4      | minimum step size allowed 
 __Linear Solver Settings__||
 direct\\_kkt\\_solver                   | true      | use a direct linear solver method (required true)
 direct\\_solve\\_method                 | :qdldl    | direct linear solver (e.g. :qdldl, :mkl, :panua, :ma57, :cholmod, :faer)
+||                                                    Also, there are two GPU solver options (e.g. :cudss, :cudssmixed)
 static\\_regularization\\_enable        | true      | enable KKT static regularization
 static\\_regularization\\_eps           | 1e-8      | KKT static regularization parameter
 static\\_regularization\\_proportional  | eps(T)^2  | additional regularization parameter w.r.t. the maximum abs diagonal term

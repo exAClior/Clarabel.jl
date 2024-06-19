@@ -94,12 +94,12 @@ function setup!(
 
     @timeit s.timers "setup!" begin
 
-        use_gpu = (s.settings.direct_kkt_solver && s.settings.direct_solve_method == :cudss)
-        use_full = use_gpu      #default gpu mapping type
-        s.use_gpu = use_gpu
+        #GPU preprocess
+        s.use_gpu = gpu_preprocess(s.settings)
+        use_full = s.use_gpu      #default gpu mapping type
 
         # user facing results go here  
-        s.solution = DefaultSolution{T}(A.n,A.m,use_gpu)
+        s.solution = DefaultSolution{T}(A.n,A.m,s.use_gpu)
 
         # presolve / chordal decomposition if needed,
         # then take an internal copy of the problem data
@@ -108,12 +108,12 @@ function setup!(
         end 
 
         cpucones  = CompositeCone{T}(s.data.cones,use_full)
-        s.cones  = use_gpu ? CompositeConeGPU{T}(cpucones) : cpucones
+        s.cones  = s.use_gpu ? CompositeConeGPU{T}(cpucones) : cpucones
 
         s.data.m == s.cones.numel || throw(DimensionMismatch())
 
-        s.variables = DefaultVariables{T}(s.data.n,s.data.m,use_gpu)
-        s.residuals = DefaultResiduals{T}(s.data.n,s.data.m,use_gpu)
+        s.variables = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
+        s.residuals = DefaultResiduals{T}(s.data.n,s.data.m,s.use_gpu)
 
         #equilibrate problem data immediately on setup.
         #this prevents multiple equlibrations if solve!
@@ -123,7 +123,7 @@ function setup!(
         end
       
         @timeit s.timers "kkt init" begin
-            if use_gpu
+            if s.use_gpu
                 gpu_data_copy!(s.data)  #YC: copy data to GPU, should be optimized later
                 s.kktsystem = DefaultKKTSystemGPU{T}(s.data,cpucones,s.settings)
             else
@@ -132,11 +132,11 @@ function setup!(
         end
 
         # work variables for assembling step direction LHS/RHS
-        s.step_rhs  = DefaultVariables{T}(s.data.n,s.data.m,use_gpu)
-        s.step_lhs  = DefaultVariables{T}(s.data.n,s.data.m,use_gpu)
+        s.step_rhs  = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
+        s.step_lhs  = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
 
         # a saved copy of the previous iterate
-        s.prev_vars = DefaultVariables{T}(s.data.n,s.data.m,use_gpu)
+        s.prev_vars = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
 
     end
 
@@ -295,7 +295,7 @@ function solve!(
 
                 #calculate step length and centering parameter
                 #--------------
-                @timeit s.timers "find step 1" α = solver_get_step_length(s,:affine,scaling,use_gpu)
+                @timeit s.timers "affine step size" α = solver_get_step_length(s,:affine,scaling,use_gpu)
                 σ = _calc_centering_parameter(α)
 
                 #make a reduced Mehrotra correction in the first iteration
@@ -330,7 +330,7 @@ function solve!(
 
             #compute final step length and update the current iterate
             #--------------
-            @timeit s.timers "find step 2" α = solver_get_step_length(s,:combined,scaling,use_gpu)
+            @timeit s.timers "combined step size" α = solver_get_step_length(s,:combined,scaling,use_gpu)
 
             # check for undersized step and update strategy
             (action,scaling) = _strategy_checkpoint_small_step(s, α, scaling)
@@ -555,6 +555,20 @@ end
 
 get_solution(s::Solver{T}) where {T} = s.solution
 get_info(s::Solver{T}) where {T} = s.info
+
+#gpu preprocess, reset the static regularization
+function gpu_preprocess(
+    settings::Settings{T}
+) where {T}
+
+    #Reset the value of static regularization
+    if settings.direct_solve_method == :cudssmixed
+        @assert(T === Float64)           #
+        settings.static_regularization_constant = sqrt(eps(Float32))
+    end
+
+    return (settings.direct_kkt_solver && (settings.direct_solve_method == :cudss || settings.direct_solve_method == :cudssmixed))
+end
 
 #copy data from CPU to GPU
 function gpu_data_copy!(data::DefaultProblemData{T}) where{T}
