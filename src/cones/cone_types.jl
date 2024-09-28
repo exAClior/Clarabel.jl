@@ -98,14 +98,12 @@ mutable struct SecondOrderCone{T} <: AbstractCone{T}
 
     function SecondOrderCone{T}(dim::Integer) where {T}
 
-        SOC_NO_EXPANSION_MAX_SIZE = 4
-
         dim >= 2 || throw(DomainError(dim, "dimension must be >= 2"))
         w = zeros(T,dim)
         λ = zeros(T,dim)
         η = zero(T)
 
-        if dim > SOC_NO_EXPANSION_MAX_SIZE
+        if dim > GPUsocSize
             sparse_data = SecondOrderConeSparseData{T}(dim)
         else
             sparse_data = nothing

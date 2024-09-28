@@ -9,7 +9,7 @@ const CuVectorView{T} = SubArray{T, 1, AbstractVector{T}, Tuple{AbstractVector{I
 mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
     # problem dimensions
-    m::Int; n::Int; p::Int
+    m::Int; n::Int
 
     # Left and right hand sides for solves
     x::AbstractVector{T}
@@ -58,16 +58,13 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         #YC: update GPU map, should be removed later on
         mapgpu   = GPUDataMap(P,A,cones,mapcpu)
 
-        #YC: disabled sparse expansion
-        #Need this many extra variables for sparse cones
+        #YC: disabled sparse expansion and preprocess a large second-order cone into multiple small cones
         p = pdim(mapcpu.sparse_maps)
-        if p > 0 
-            error("We don't support the augmented sparse cone at the moment!")
-        end
+        @assert(iszero(p))
 
         #updates to the diagonal of KKT will be
         #assigned here before updating matrix entries
-        dim = m + n + p
+        dim = m + n
 
         #LHS/RHS/work for iterative refinement
         x    = CuVector{T}(undef,dim)
@@ -87,7 +84,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         #the indirect linear solver engine
         GPUsolver = GPUsolverT{T}(KKTgpu,x,b)
 
-        return new(m,n,p,x,b,
+        return new(m,n,x,b,
                    work1,work2,mapcpu,mapgpu,
                    Dsigns,
                    Hsblocks,
@@ -147,22 +144,6 @@ function _update_diag_values_KKT!(
     
 end
 
-
-# #scale entries in the kktsolver object using the
-# #given index into its CSC representation
-# function _scale_values!(
-#     GPUsolver::AbstractGPUSolver{T},
-#     KKT::SparseMatrixCSC{T,Ti},
-#     index::AbstractVector{Ti},
-#     scale::T
-# ) where{T,Ti}
-
-#     #Update values in the KKT matrix K
-#     @. KKT.nzval[index] *= scale
-
-# end
-
-
 function kktsolver_update!(
     kktsolver:: GPULDLKKTSolver{T},
     cones::CompositeConeGPU{T}
@@ -195,20 +176,6 @@ function _kktsolver_update_inner!(
 
     @. kktsolver.Hsblocks *= -one(T)
     _update_values!(GPUsolver,KKT,map.Hsblocks,kktsolver.Hsblocks)
-
-    #YC: disabled sparse expansion
-    # sparse_map_iter = Iterators.Stateful(map.sparse_maps)
-
-    # updateFcn = (index,values) -> _update_values!(GPUsolver,KKTcpu,index,values)
-    # scaleFcn  = (index,scale)  -> _scale_values!(GPUsolver,KKTcpu,index,scale)
-
-    # for cone in cones
-    #     #add sparse expansions columns for sparse cones 
-    #     if @conedispatch is_sparse_expandable(cone)
-    #         thismap = popfirst!(sparse_map_iter)
-    #         _csc_update_sparsecone_full(cone,thismap,updateFcn,scaleFcn)
-    #     end 
-    # end
 
     return _kktsolver_regularize_and_refactor!(kktsolver, GPUsolver)
 
@@ -286,11 +253,10 @@ function kktsolver_setrhs!(
 ) where {T}
 
     b = kktsolver.b
-    (m,n,p) = (kktsolver.m,kktsolver.n,kktsolver.p)
+    (m,n) = (kktsolver.m,kktsolver.n)
 
     b[1:n]             .= rhsx
     b[(n+1):(n+m)]     .= rhsz
-    b[(n+m+1):(n+m+p)] .= 0
     
     CUDA.synchronize()
 

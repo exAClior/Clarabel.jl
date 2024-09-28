@@ -29,6 +29,15 @@ function DefaultProblemData{T}(
 		(A, b, cones) = (A_new, b_new, cones_new)
 	end
 
+	# Preprocess large second-order cones
+	if settings.direct_solve_method === :cudss 
+		size_soc = GPUsocSize
+		num_socs, last_sizes, soc_indices, soc_starts = expand_soc(cones,size_soc)
+		P_new,q_new,A_new,b_new,cones_new =  augment_A_b(cones,P,q,A,b,size_soc,num_socs, last_sizes, soc_indices, soc_starts)
+
+		(P, q, A, b, cones) = (P_new, q_new, A_new, b_new, cones_new)
+	end
+
 	# chordal decomposition : return nothing if disabled or no decomp
 	# --------------------------------------
 	chordal_info = try_chordal_info(A,b,cones,settings)
