@@ -56,13 +56,18 @@ function augment_data(At0,
     return Atnew, bnew, conenew, augx_idx
 end
 
-function augment_A_b(cones,
-    P,
+function augment_A_b_soc(
+    cones::Vector{SupportedCone},
+    P::AbstractMatrix{T},
     q::Vector{T},
-    A,
-    b,
-    size_soc,
-    num_socs, last_sizes, soc_indices, soc_starts) where {T}
+    A::AbstractMatrix{T},
+    b::Vector{T},
+    size_soc::Int64,
+    num_socs::Vector{Int}, 
+    last_sizes::Vector{Int}, 
+    soc_indices::Vector{Int}, 
+    soc_starts::Vector{Int}
+) where {T}
 
     (m,n) = size(A)
     
@@ -115,7 +120,10 @@ function augment_A_b(cones,
     return Pnew,vcat(q,zeros(extra_dim)),SparseMatrixCSC(Atnew'), bnew, conesnew
 end
 
-function expand_soc(cones,size_soc)
+function expand_soc(
+    cones::Vector{SupportedCone},
+    size_soc::Int64
+)
     n_large_soc = 0
     soc_indices = sizehint!(Int[],length(cones))            #Indices of large second-order cones 
     soc_starts = sizehint!(Int[],length(cones))          #Starting index of each large second-order cone 

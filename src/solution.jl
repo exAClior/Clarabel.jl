@@ -39,7 +39,7 @@ function solution_post_process!(
 	elseif settings.direct_solve_method === :cudss && (length(solution.x) != length(variables.x))
 		lenx = length(solution.x)
 		@. solution.x = variables.x[1:lenx]		#extra entries are slack variables for large second-order cones
-		println("Solve an augmented problem that only returns value x")
+		# println("Solve an augmented problem that only returns value x")
 	else
 		@. solution.x = variables.x
 		@. solution.z = variables.z 

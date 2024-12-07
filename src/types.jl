@@ -150,6 +150,7 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
     function DefaultEquilibration{T}(
         n::Int64,
         m::Int64,
+        use_gpu::Bool
     ) where {T}
 
         #Left/Right diagonal scaling for problem data
@@ -160,10 +161,17 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
 
         c    = Ref(T(1.))
 
-        d_gpu = n > 0 ? unsafe_wrap(CuArray{T,1},d) : CUDA.zeros(T,0)
-        dinv_gpu = n > 0 ? unsafe_wrap(CuArray{T,1},dinv) : CUDA.zeros(T,0)
-        e_gpu = m > 0 ? unsafe_wrap(CuArray{T,1},e) : CUDA.zeros(T,0)
-        einv_gpu = m > 0 ? unsafe_wrap(CuArray{T,1},einv) : CUDA.zeros(T,0)
+        if use_gpu
+            d_gpu = n > 0 ? unsafe_wrap(CuArray{T,1},d) : CUDA.zeros(T,0)
+            dinv_gpu = n > 0 ? unsafe_wrap(CuArray{T,1},dinv) : CUDA.zeros(T,0)
+            e_gpu = m > 0 ? unsafe_wrap(CuArray{T,1},e) : CUDA.zeros(T,0)
+            einv_gpu = m > 0 ? unsafe_wrap(CuArray{T,1},einv) : CUDA.zeros(T,0)
+        else
+            d_gpu = Vector{Float64}()
+            dinv_gpu = Vector{Float64}()
+            e_gpu = Vector{Float64}()
+            einv_gpu = Vector{Float64}()
+        end
 
         new(d,dinv,e,einv,c,d_gpu,dinv_gpu,e_gpu,einv_gpu)
     end

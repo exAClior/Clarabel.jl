@@ -29,13 +29,16 @@ function DefaultProblemData{T}(
 		(A, b, cones) = (A_new, b_new, cones_new)
 	end
 
+	use_gpu = settings.direct_solve_method === :cudss ? true : false
 	# Preprocess large second-order cones
-	if settings.direct_solve_method === :cudss 
+	if use_gpu
 		size_soc = GPUsocSize
 		num_socs, last_sizes, soc_indices, soc_starts = expand_soc(cones,size_soc)
-		P_new,q_new,A_new,b_new,cones_new =  augment_A_b(cones,P,q,A,b,size_soc,num_socs, last_sizes, soc_indices, soc_starts)
 
-		(P, q, A, b, cones) = (P_new, q_new, A_new, b_new, cones_new)
+		if (length(num_socs) > 0)
+			P_new,q_new,A_new,b_new,cones_new =  augment_A_b_soc(cones,P,q,A,b,size_soc,num_socs, last_sizes, soc_indices, soc_starts)
+			(P, q, A, b, cones) = (P_new, q_new, A_new, b_new, cones_new)
+		end
 	end
 
 	# chordal decomposition : return nothing if disabled or no decomp
@@ -69,7 +72,7 @@ function DefaultProblemData{T}(
 	#this ensures m is the *reduced* size m
 	(m,n) = size(A_new)
 
-	equilibration = DefaultEquilibration{T}(n,m)
+	equilibration = DefaultEquilibration{T}(n,m,use_gpu)
 
 	normq = norm(q_new, Inf)
 	normb = norm(b_new, Inf)
