@@ -8,7 +8,7 @@ function _assemble_full_kkt_matrix(
     shape::Symbol = :triu  #or tril
 ) where{T}
 
-    map   = IndirectDataMap(P,A,cones)
+    map   = FullDataMap(P,A,cones)
     (m,n) = (size(A,1), size(P,1))
     p     = pdim(map.sparse_maps)
 

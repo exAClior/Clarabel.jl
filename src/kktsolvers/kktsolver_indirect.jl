@@ -20,7 +20,7 @@ mutable struct IndirectKKTSolver{T} <: AbstractKKTSolver{T}
     work2::AbstractVector{T}
 
     #KKT mapping from problem data to KKT
-    map::IndirectDataMap 
+    map::FullDataMap 
 
     #the expected signs of D in KKT = LDL^T
     Dsigns::Vector{Int}

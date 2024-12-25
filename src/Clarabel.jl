@@ -47,8 +47,8 @@ module Clarabel
 
     #direct LDL linear solve methods
     include("./kktsolvers/direct-ldl/includes.jl")
-    # Indirect linear solve methods
-    include("./kktsolvers/indirect/includes.jl")
+    # # Indirect linear solve methods
+    # include("./kktsolvers/indirect/includes.jl")
 
     #KKT solvers and solver level kktsystem
     include("./kktsolvers/kktsolver_defaults.jl")
@@ -60,9 +60,9 @@ module Clarabel
     include("./info.jl")
     include("./solution.jl")
     
-    # Indirect KKT solver
-    include("./kktsolvers/kktsolver_indirect.jl")
-    include("./kktsolvers/indirect/preconditioner/includes.jl")
+    # # Indirect KKT solver
+    # include("./kktsolvers/kktsolver_indirect.jl")
+    # include("./kktsolvers/indirect/preconditioner/includes.jl")
 
     #GPU ldl methods
     include("./kktsolvers/gpu/includes.jl")

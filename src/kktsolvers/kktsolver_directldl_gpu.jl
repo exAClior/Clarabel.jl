@@ -21,7 +21,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
     work2::AbstractVector{T}
 
     #KKT mapping from problem data to KKT
-    mapcpu::IndirectDataMap
+    mapcpu::FullDataMap
     mapgpu::GPUDataMap 
 
     #the expected signs of D in KKT = LDL^T
