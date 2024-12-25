@@ -6,8 +6,6 @@ version = "0.9.0"
 [deps]
 AMD = "14f7f29c-3bd6-536c-9a0b-7339e30b5a3e"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
-ClarabelBenchmarks = "086be79b-982c-4ee0-9f3a-5052a7be4b8e"
-ClarabelRs = "a0c58a0a-712c-48b7-9fd4-64369ecb2011"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 GenericLinearAlgebra = "14197337-ba66-59df-a3e3-ca00e7dcff7a"
 HSL = "34c5aeac-e683-54a6-a0e9-6e0fdc586c50"
