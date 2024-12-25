@@ -6,7 +6,7 @@ module Clarabel
     using CUDA, CUDA.CUBLAS # for GPU implementation
     const DefaultFloat = Float64
     const DefaultInt   = Int64
-    const GPUsocSize   = 5  # maximal size of second-order cones in GPU implementation
+    const SOC_NO_EXPANSION_MAX_SIZE   = 5  # maximal size of second-order cones in GPU implementation
 
     # Rust-like Option type
     const Option{T} = Union{Nothing,T} 
@@ -21,6 +21,9 @@ module Clarabel
         global set_infinity(v::Float64) = INFINITY =  Float64(v)
         global get_infinity() = INFINITY
     end 
+    
+    #List of GPU solvers
+    gpu_solver_list = [:cudss, :cudssmixed]
     
     #version / release info
     include("./version.jl")

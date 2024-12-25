@@ -103,10 +103,6 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     #the direct linear solver package to use
     direct_kkt_solver::Bool             = true   #indirect not yet supported
     direct_solve_method::Symbol         = :qdldl
-    
-    # indirect solve method
-    # for now, we use MINRES
-    indirect_solve_method::Symbol       = :minres
 
     #static regularization parameters
     static_regularization_enable::Bool    = true
@@ -140,7 +136,6 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
 
     # device: can be :cpu or :gpu
     device::Symbol                      = :cpu
-    preconditioner                      = 1         #partial preconditioner
 end
 
 Settings(args...) = Settings{DefaultFloat}(args...)

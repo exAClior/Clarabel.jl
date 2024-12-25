@@ -29,10 +29,10 @@ function DefaultProblemData{T}(
 		(A, b, cones) = (A_new, b_new, cones_new)
 	end
 
-	use_gpu = settings.direct_solve_method === :cudss ? true : false
+	use_gpu = settings.direct_solve_method in gpu_solver_list ? true : false
 	# Preprocess large second-order cones
 	if use_gpu
-		size_soc = GPUsocSize
+		size_soc = SOC_NO_EXPANSION_MAX_SIZE
 		num_socs, last_sizes, soc_indices, soc_starts = expand_soc(cones,size_soc)
 
 		if (length(num_socs) > 0)
@@ -61,7 +61,7 @@ function DefaultProblemData{T}(
 	cones_new = copy_if_nothing(cones_new,cones)
 
 	#GPU requires a full P
-	P_new = (!(settings.direct_kkt_solver) || settings.direct_solve_method == :cudss) ? SparseMatrixCSC(Symmetric(triu(P_new))) : triu(P_new);
+	P_new = (settings.direct_solve_method in gpu_solver_list) ? SparseMatrixCSC(Symmetric(triu(P_new))) : triu(P_new);
 
 	#cap entries in b at INFINITY.  This is important 
 	#for inf values that were not in a reduced cone

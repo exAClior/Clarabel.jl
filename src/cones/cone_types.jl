@@ -103,7 +103,7 @@ mutable struct SecondOrderCone{T} <: AbstractCone{T}
         λ = zeros(T,dim)
         η = zero(T)
 
-        if dim > GPUsocSize
+        if dim > SOC_NO_EXPANSION_MAX_SIZE
             sparse_data = SecondOrderConeSparseData{T}(dim)
         else
             sparse_data = nothing

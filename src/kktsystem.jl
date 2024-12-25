@@ -29,16 +29,7 @@ mutable struct DefaultKKTSystem{T} <: AbstractKKTSystem{T}
         #basic problem dimensions
         (m, n) = (data.m, data.n)
 
-        #YC: should be optimized by Dict
-        if settings.direct_kkt_solver
-            if settings.direct_solve_method == :cudss 
-                kktsolver = GPULDLKKTSolver{T}(data.P,data.A,cones,m,n,settings)
-            else
-                kktsolver = DirectLDLKKTSolver{T}(data.P,data.A,cones,m,n,settings)
-            end
-        else
-            kktsolver = IndirectKKTSolver{T}(data.P,data.A,cones,m,n,settings)
-        end
+        kktsolver = DirectLDLKKTSolver{T}(data.P,data.A,cones,m,n,settings)
 
         #the LHS constant part of the reduced solve
         x1   = zeros(T,n)
