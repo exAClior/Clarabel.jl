@@ -47,8 +47,6 @@ module Clarabel
 
     #direct LDL linear solve methods
     include("./kktsolvers/direct-ldl/includes.jl")
-    # # Indirect linear solve methods
-    # include("./kktsolvers/indirect/includes.jl")
 
     #KKT solvers and solver level kktsystem
     include("./kktsolvers/kktsolver_defaults.jl")
@@ -59,10 +57,6 @@ module Clarabel
 
     include("./info.jl")
     include("./solution.jl")
-    
-    # # Indirect KKT solver
-    # include("./kktsolvers/kktsolver_indirect.jl")
-    # include("./kktsolvers/indirect/preconditioner/includes.jl")
 
     #GPU ldl methods
     include("./kktsolvers/gpu/includes.jl")
@@ -130,15 +124,15 @@ module Clarabel
     const Optimizer{T} = Clarabel.MOIwrapper.Optimizer{T}
 
 
-    # #precompile minimal MOI / native examples
-    # using SnoopPrecompile
-    # include("./precompile.jl")
-    # redirect_stdout(devnull) do; 
-    #     SnoopPrecompile.@precompile_all_calls begin
-    #         __precompile_native()
-    #         __precompile_moi()
-    #     end
-    # end
-    # __precompile_printfcns()
+    #precompile minimal MOI / native examples
+    using SnoopPrecompile
+    include("./precompile.jl")
+    redirect_stdout(devnull) do; 
+        SnoopPrecompile.@precompile_all_calls begin
+            __precompile_native()
+            __precompile_moi()
+        end
+    end
+    __precompile_printfcns()
 
 end #end module
