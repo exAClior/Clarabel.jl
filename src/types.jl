@@ -24,14 +24,14 @@ struct Presolver{T}
     reduce_map::Option{PresolverRowReductionIndex}
 
     # size of original and reduced RHS, respectively 
-    mfull::Int64 
-    mreduced::Int64
+    mfull::DefaultInt 
+    mreduced::DefaultInt
 
     # inf bound that was taken from the module level 
     # and should be applied throughout.   Held here so 
     # that any subsequent change to the module's state 
     # won't mess up our solver mid-solve 
-    infbound::Float64 
+    infbound::DefaultFloat 
 
 end
 
@@ -50,8 +50,8 @@ mutable struct DefaultVariables{T} <: AbstractVariables{T}
     κ::T
 
     function DefaultVariables{T}(
-        n::Integer, 
-        m::Integer,
+        n::DefaultInt, 
+        m::DefaultInt,
         use_gpu::Bool
     ) where {T}
 
@@ -102,8 +102,8 @@ mutable struct DefaultResiduals{T} <: AbstractResiduals{T}
     #the product Px by itself. Required for infeasibilty checks
     Px::AbstractVector{T}
 
-    function DefaultResiduals{T}(n::Integer,
-                                 m::Integer,
+    function DefaultResiduals{T}(n::DefaultInt,
+                                 m::DefaultInt,
                                  use_gpu::Bool) where {T}
 
         VecType = use_gpu ? CuVector : Vector
@@ -148,8 +148,8 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
     einv_gpu::AbstractVector{T}    
 
     function DefaultEquilibration{T}(
-        n::Int64,
-        m::Int64,
+        n::DefaultInt,
+        m::DefaultInt,
         use_gpu::Bool
     ) where {T}
 

@@ -5,7 +5,7 @@ module Clarabel
     using LimitedLDLFactorizations # for lldl
     using CUDA, CUDA.CUBLAS # for GPU implementation
     const DefaultFloat = Float64
-    const DefaultInt   = LinearAlgebra.BlasInt
+    const DefaultInt   = Int64
     const GPUsocSize   = 5  # maximal size of second-order cones in GPU implementation
 
     # Rust-like Option type
