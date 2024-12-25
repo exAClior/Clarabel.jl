@@ -6,7 +6,7 @@
   <img alt="Clarabel.jl logo" src="https://github.com/oxfordcontrol/ClarabelDocs/blob/main/docs/src/assets/logo-banner-light-jl.png" height="25">
 </picture>
 <h1 align="center" margin=0px>
-Interior Point Conic Optimization for Julia
+GPU implementation of Clarabel solver for Julia
 </h1>
    <a href="https://github.com/oxfordcontrol/Clarabel.jl/actions"><img src="https://github.com/oxfordcontrol/Clarabel.jl/workflows/ci/badge.svg?branch=main"></a>
   <a href="https://codecov.io/gh/oxfordcontrol/Clarabel.jl"><img src="https://codecov.io/gh/oxfordcontrol/Clarabel.jl/branch/main/graph/badge.svg"></a>
@@ -22,7 +22,7 @@ Interior Point Conic Optimization for Julia
   <a href="https://oxfordcontrol.github.io/ClarabelDocs/stable">Documentation</a>
 </p>
 
-__Clarabel.jl__ is a Julia implementation of an interior point numerical solver for convex optimization problems using a novel homogeneous embedding.  Clarabel.jl solves the following problem:
+__clarabel-gpu.jl__ is the GPU implementation of the Clarabel solver, which can solve conic problems of the following form:
 
 $$
 \begin{array}{r}
@@ -40,35 +40,54 @@ $P=P^\top \succeq 0$,
 $q \in \mathbb{R}^n$,
 $A \in \mathbb{R}^{m \times n}$, and
 $b \in \mathbb{R}^m$.
-The convex set $\mathcal{K}$ is a composition of convex cones.
+The convex set $\mathcal{K}$ is a composition of convex cones, including zero cones (linear equality constraints), nonnegative cones (linear inequality constraints), second-order cones, exponential cone and power cones. It relies on the external package [CUDSS.jl](https://github.com/exanauts/CUDSS.jl) for the linear system solver [CUDSS](https://developer.nvidia.com/cudss).
 
-
-__For more information see the Clarabel Documentation ([stable](https://oxfordcontrol.github.io/ClarabelDocs/stable) |  [dev](https://oxfordcontrol.github.io/ClarabelDocs/dev)).__
-
-Clarabel is also available in a Rust implementation with additional language interfaces.  See [here](https://github.com/oxfordcontrol/Clarabel.rs).
-
-## Features
-
-* __Versatile__: Clarabel.jl solves linear programs (LPs), quadratic programs (QPs), second-order cone programs (SOCPs) and semidefinite programs (SDPs). It also solves problems with exponential, power cone and generalized power cone constraints.
-* __Quadratic objectives__: Unlike interior point solvers based on the standard homogeneous self-dual embedding (HSDE), Clarabel.jl handles quadratic objectives without requiring any epigraphical reformulation of the objective.   It can therefore be significantly faster than other HSDE-based solvers for problems with quadratic objective functions.
-* __Infeasibility detection__: Infeasible problems are detected using a homogeneous embedding technique.
-* __JuMP / Convex.jl support__: We provide an interface to [MathOptInterface](https://jump.dev/JuMP.jl/stable/moi/) (MOI), which allows you to describe your problem in [JuMP](https://github.com/jump-dev/JuMP.jl) and [Convex.jl](https://github.com/jump-dev/Convex.jl).
-* __Arbitrary precision types__: You can solve problems with any floating point precision, for example, Float32 or Julia's BigFloat type, using either the native interface, or via MathOptInterface / Convex.jl.
-* __Open Source__: Our code is available on [GitHub](https://github.com/oxfordcontrol/Clarabel.jl) and distributed under the Apache 2.0 License
 
 ## Installation
-- __Clarabel.jl__ can be added via the Julia package manager (type `]`): `pkg> add Clarabel`
+- __clarabel-gpu.jl__ can be added via the Julia package manager (type `]`): `pkg> dev https://github.com/cvxgrp/clarabel-gpu.git`, (which will overwrite current use of Clarabel solver).
+
+## Tutorial
+Modelling a conic optimization problem is the same as in original [Clarabel solver](https://clarabel.org/stable/) except setting the parameter `direct_solve_method` to `:cudss` or `:cudssmixed`. Here is a portfolio optimization problem modelled via JuMP:
+```
+using LinearAlgebra, SparseArrays, Random, JuMP
+using Clarabel
+
+## generate the data
+rng = Random.MersenneTwister(1)
+k = 5; # number of factors
+n = k * 10; # number of assets
+D = spdiagm(0 => rand(rng, n) .* sqrt(k))
+F = sprandn(rng, n, k, 0.5); # factor loading matrix
+μ = (3 .+ 9. * rand(rng, n)) / 100. # expected returns between 3% - 12%
+γ = 1.0; # risk aversion parameter
+d = 1 # we are starting from all cash
+x0 = zeros(n);
+
+a = 1e-3
+b = 1e-1
+γ = 1.0;
+
+model = JuMP.Model(Clarabel.Optimizer)
+set_optimizer_attribute(model, "direct_solve_method", :cudss)
+
+@variable(model, x[1:n])
+@variable(model, y[1:k])   
+@variable(model, s[1:n])
+@variable(model, t[1:n])
+@objective(model, Min, x' * D * x + y' * y - 1/γ * μ' * x);
+@constraint(model, y .== F' * x);
+@constraint(model, x .>= 0);
+
+# transaction costs
+@constraint(model, sum(x) + a * sum(s) == d + sum(x0) );
+@constraint(model, [i = 1:n], x0[i] - x[i] == t[i]) 
+@constraint(model, [i = 1:n], [s[i], t[i]] in MOI.SecondOrderCone(2));
+JuMP.optimize!(model)
+```
 
 ## Citing
 ```
-@misc{Clarabel_2024,
-      title={Clarabel: An interior-point solver for conic programs with quadratic objectives}, 
-      author={Paul J. Goulart and Yuwen Chen},
-      year={2024},
-      eprint={2405.12762},
-      archivePrefix={arXiv},
-      primaryClass={math.OC}
-}
+Coming out soon
 ```
 
 ## License 🔍
