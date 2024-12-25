@@ -36,7 +36,7 @@ function solution_post_process!(
 
 	if !isnothing(data.presolver) 
 		reverse_presolve!(data.presolver, solution, variables)
-	elseif settings.direct_solve_method === :cudss && (length(solution.x) != length(variables.x))
+	elseif settings.direct_solve_method in gpu_solver_list && (length(solution.x) != length(variables.x))
 		lenx = length(solution.x)
 		@. solution.x = variables.x[1:lenx]		#extra entries are slack variables for large second-order cones
 		# println("Solve an augmented problem that only returns value x")

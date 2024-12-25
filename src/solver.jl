@@ -567,7 +567,7 @@ function gpu_preprocess(
         settings.static_regularization_constant = sqrt(eps(Float32))
     end
 
-    return (settings.direct_kkt_solver && (settings.direct_solve_method == :cudss || settings.direct_solve_method == :cudssmixed))
+    return (settings.direct_kkt_solver && (settings.direct_solve_method in gpu_solver_list))
 end
 
 #copy data from CPU to GPU

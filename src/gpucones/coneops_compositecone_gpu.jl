@@ -27,8 +27,8 @@ end
 
 # function rectify_equilibration!(
 #     cones::CompositeCone{T},
-#      δ::ConicVector{T},
-#      e::ConicVector{T}
+#      δ::AbstractVector{T},
+#      e::AbstractVector{T}
 # ) where{T}
 
 #     any_changed = false
@@ -620,10 +620,10 @@ end
 # # compute the total barrier function at the point (z + α⋅dz, s + α⋅ds)
 # function compute_barrier(
 #     cones::CompositeCone{T},
-#     z::ConicVector{T},
-#     s::ConicVector{T},
-#     dz::ConicVector{T},
-#     ds::ConicVector{T},
+#     z::AbstractVector{T},
+#     s::AbstractVector{T},
+#     dz::AbstractVector{T},
+#     ds::AbstractVector{T},
 #     α::T
 # ) where {T}
 

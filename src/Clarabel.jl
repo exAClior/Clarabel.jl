@@ -5,8 +5,8 @@ module Clarabel
     using LimitedLDLFactorizations # for lldl
     using CUDA, CUDA.CUBLAS # for GPU implementation
     const DefaultFloat = Float64
-    const DefaultInt   = LinearAlgebra.BlasInt
-    const GPUsocSize   = 5  # maximal size of second-order cones in GPU implementation
+    const DefaultInt   = Int64
+    const SOC_NO_EXPANSION_MAX_SIZE   = 5  # maximal size of second-order cones in GPU implementation
 
     # Rust-like Option type
     const Option{T} = Union{Nothing,T} 
@@ -21,6 +21,9 @@ module Clarabel
         global set_infinity(v::Float64) = INFINITY =  Float64(v)
         global get_infinity() = INFINITY
     end 
+    
+    #List of GPU solvers
+    gpu_solver_list = [:cudss, :cudssmixed]
     
     #version / release info
     include("./version.jl")
@@ -47,8 +50,6 @@ module Clarabel
 
     #direct LDL linear solve methods
     include("./kktsolvers/direct-ldl/includes.jl")
-    # Indirect linear solve methods
-    include("./kktsolvers/indirect/includes.jl")
 
     #KKT solvers and solver level kktsystem
     include("./kktsolvers/kktsolver_defaults.jl")
@@ -59,10 +60,6 @@ module Clarabel
 
     include("./info.jl")
     include("./solution.jl")
-    
-    # Indirect KKT solver
-    include("./kktsolvers/kktsolver_indirect.jl")
-    include("./kktsolvers/indirect/preconditioner/includes.jl")
 
     #GPU ldl methods
     include("./kktsolvers/gpu/includes.jl")
@@ -130,15 +127,15 @@ module Clarabel
     const Optimizer{T} = Clarabel.MOIwrapper.Optimizer{T}
 
 
-    # #precompile minimal MOI / native examples
-    # using SnoopPrecompile
-    # include("./precompile.jl")
-    # redirect_stdout(devnull) do; 
-    #     SnoopPrecompile.@precompile_all_calls begin
-    #         __precompile_native()
-    #         __precompile_moi()
-    #     end
-    # end
-    # __precompile_printfcns()
+    #precompile minimal MOI / native examples
+    using SnoopPrecompile
+    include("./precompile.jl")
+    redirect_stdout(devnull) do; 
+        SnoopPrecompile.@precompile_all_calls begin
+            __precompile_native()
+            __precompile_moi()
+        end
+    end
+    __precompile_printfcns()
 
 end #end module
