@@ -47,7 +47,7 @@ The set $\mathcal{K}$ is a composition of convex cones; we support zero cones (l
 - __clarabel-gpu.jl__ can be added via the Julia package manager (type `]`): `pkg> dev https://github.com/cvxgrp/clarabel-gpu.git`, (which will overwrite current use of Clarabel solver).
 
 ## Tutorial
-Modeling a conic optimization problem is the same as in original [Clarabel solver](https://clarabel.org/stable/), except with the additional parameter `direct_solve_method`. This can be set to `:cudss` or `:cudssmixed`. Here is a portfolio optimization problem modelled via JuMP:
+Modeling a conic optimization problem is the same as in the original [Clarabel solver](https://clarabel.org/stable/), except with the additional parameter `direct_solve_method`. This can be set to `:cudss` or `:cudssmixed`. Here is a portfolio optimization problem modelled via JuMP:
 ```
 using LinearAlgebra, SparseArrays, Random, JuMP
 using Clarabel
