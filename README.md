@@ -40,14 +40,14 @@ $P=P^\top \succeq 0$,
 $q \in \mathbb{R}^n$,
 $A \in \mathbb{R}^{m \times n}$, and
 $b \in \mathbb{R}^m$.
-The convex set $\mathcal{K}$ is a composition of convex cones, including zero cones (linear equality constraints), nonnegative cones (linear inequality constraints), second-order cones, exponential cone and power cones. It relies on the external package [CUDSS.jl](https://github.com/exanauts/CUDSS.jl) for the linear system solver [CUDSS](https://developer.nvidia.com/cudss).
+The set $\mathcal{K}$ is a composition of convex cones; we support zero cones (linear equality constraints), nonnegative cones (linear inequality constraints), second-order cones, exponential cone and power cones. Our package relies on the external package [CUDSS.jl](https://github.com/exanauts/CUDSS.jl) for the linear system solver [CUDSS](https://developer.nvidia.com/cudss). We also support linear system solves in lower (mixed) precision.
 
 
 ## Installation
 - __clarabel-gpu.jl__ can be added via the Julia package manager (type `]`): `pkg> dev https://github.com/cvxgrp/clarabel-gpu.git`, (which will overwrite current use of Clarabel solver).
 
 ## Tutorial
-Modelling a conic optimization problem is the same as in original [Clarabel solver](https://clarabel.org/stable/) except setting the parameter `direct_solve_method` to `:cudss` or `:cudssmixed`. Here is a portfolio optimization problem modelled via JuMP:
+Modeling a conic optimization problem is the same as in original [Clarabel solver](https://clarabel.org/stable/), except with the additional parameter `direct_solve_method`. This can be set to `:cudss` or `:cudssmixed`. Here is a portfolio optimization problem modelled via JuMP:
 ```
 using LinearAlgebra, SparseArrays, Random, JuMP
 using Clarabel
