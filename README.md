@@ -87,7 +87,15 @@ JuMP.optimize!(model)
 
 ## Citing
 ```
-Coming out soon
+@misc{CuClarabel,
+      title={CuClarabel: GPU Acceleration for a Conic Optimization Solver}, 
+      author={Yuwen Chen and Danny Tse and Parth Nobel and Paul Goulart and Stephen Boyd},
+      year={2024},
+      eprint={2412.19027},
+      archivePrefix={arXiv},
+      primaryClass={math.OC},
+      url={https://arxiv.org/abs/2412.19027}, 
+}
 ```
 
 ## License 🔍
