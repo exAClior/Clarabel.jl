@@ -22,7 +22,7 @@ GPU implementation of Clarabel solver for Julia
   <a href="https://oxfordcontrol.github.io/ClarabelDocs/stable">Documentation</a>
 </p>
 
-__clarabel-gpu.jl__ is the GPU implementation of the Clarabel solver, which can solve conic problems of the following form:
+__CuClarabel.jl__ is the GPU implementation of the Clarabel solver, which can solve conic problems of the following form:
 
 $$
 \begin{array}{r}
@@ -44,7 +44,7 @@ The set $\mathcal{K}$ is a composition of convex cones; we support zero cones (l
 
 
 ## Installation
-- __clarabel-gpu.jl__ can be added via the Julia package manager (type `]`): `pkg> dev https://github.com/cvxgrp/clarabel-gpu.git`, (which will overwrite current use of Clarabel solver).
+- __CuClarabel.jl__ can be added via the Julia package manager (type `]`): `pkg> dev https://github.com/cvxgrp/CuClarabel.git`, (which will overwrite current use of Clarabel solver).
 
 ## Tutorial
 Modeling a conic optimization problem is the same as in the original [Clarabel solver](https://clarabel.org/stable/), except with the additional parameter `direct_solve_method`. This can be set to `:cudss` or `:cudssmixed`. Here is a portfolio optimization problem modelled via JuMP:
