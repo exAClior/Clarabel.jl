@@ -22,7 +22,7 @@ GPU implementation of Clarabel solver for Julia
   <a href="https://oxfordcontrol.github.io/ClarabelDocs/stable">Documentation</a>
 </p>
 
-__clarabel-gpu.jl__ is the GPU implementation of the Clarabel solver, which can solve conic problems of the following form:
+__CuClarabel.jl__ is the GPU implementation of the Clarabel solver, which can solve conic problems of the following form:
 
 $$
 \begin{array}{r}
