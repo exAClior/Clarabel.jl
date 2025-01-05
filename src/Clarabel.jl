@@ -2,7 +2,6 @@ __precompile__()
 module Clarabel
 
     using SparseArrays, LinearAlgebra, Printf, Requires
-    using LimitedLDLFactorizations # for lldl
     using CUDA, CUDA.CUBLAS # for GPU implementation
     const DefaultFloat = Float64
     const DefaultInt   = Int64
