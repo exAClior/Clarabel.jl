@@ -49,11 +49,6 @@ struct CompositeCone{T} <: AbstractCone{T}
             push!(cones,cone)
         end
 
-        #No GPU support for PSD cones at present
-        if use_gpu 
-            @assert(!haskey(type_counts,PSDTriangleCone))
-        end 
-
         #count up elements and degree
         numel  = sum(cone -> Clarabel.numel(cone), cones; init = 0)
         degree = sum(cone -> Clarabel.degree(cone), cones; init = 0)

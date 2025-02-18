@@ -39,6 +39,23 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     Hs::AbstractArray{T}            #scaling matrix
     grad::AbstractArray{T}         #gradient of the dual barrier at z 
 
+    #PSD cone
+    psd_dim::Int32                  #We only support PSD cones with the same small dimension
+    chol1::AbstractArray{T,3}
+    chol2::AbstractArray{T,3}
+    SVD::AbstractArray{T,3}
+    λpsd::AbstractMatrix{T}
+    Λisqrt::AbstractMatrix{T}
+    R::AbstractArray{T,3}
+    Rinv::AbstractArray{T,3}
+    Hspsd::AbstractArray{T,3}
+
+    #workspace for various internal uses
+    workmat1::AbstractArray{T,3}
+    workmat2::AbstractArray{T,3}
+    workmat3::AbstractArray{T,3}
+    workvec::AbstractVector{T}
+
     #step_size
     α::AbstractVector{T}
 
@@ -55,6 +72,8 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         n_soc = haskey(type_counts,SecondOrderCone) ? type_counts[SecondOrderCone] : 0
         n_exp = haskey(type_counts,ExponentialCone) ? type_counts[ExponentialCone] : 0
         n_pow = haskey(type_counts,PowerCone) ? type_counts[PowerCone] : 0
+        n_psd = haskey(type_counts,PSDTriangleCone) ? type_counts[PSDTriangleCone] : 0
+
         #idx set for eq and ineq constraints
         idx_eq = Vector{Cint}([])
         idx_inq = Vector{Cint}([])
@@ -87,12 +106,38 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         Hs = CuArray{T}(undef,n_exp+n_pow,3,3)
         grad = CuArray{T}(undef,n_exp+n_pow,3)
 
-        α = CuVector{T}(undef,max(max_linear,n_soc,n_exp,n_pow)) #workspace for step size calculation
+        #PSD cone
+        #We require all psd cones have the same dimensionality
+        psd_ind = pow_ind + n_pow
+        psd_dim = (type_counts[PSDTriangleCone] > 0) ? cones[psd_ind+1].n : 0
+        for i in 1:n_psd
+            if(psd_dim != cones[psd_ind+i].n)
+                throw(DimensionMismatch("Not all positive definite cones have the same dimensionality!"))
+            end
+        end
+
+        chol1 = CUDA.zeros(T,psd_dim,psd_dim,n_psd)
+        chol2 = CUDA.zeros(T,psd_dim,psd_dim,n_psd)
+        SVD   = CUDA.zeros(T,psd_dim,psd_dim,n_psd)
+
+        λpsd   = CUDA.zeros(T,psd_dim,n_psd)
+        Λisqrt = CUDA.zeros(T,psd_dim,n_psd)
+        R      = CUDA.zeros(T,psd_dim,psd_dim,n_psd)
+        Rinv   = CUDA.zeros(T,psd_dim,psd_dim,n_psd)
+        Hspsd  = CUDA.zeros(T,triangular_number(psd_dim),triangular_number(psd_dim),n_psd)
+
+        workmat1 = CUDA.zeros(T,psd_dim,psd_dim,n_psd)
+        workmat2 = CUDA.zeros(T,psd_dim,psd_dim,n_psd)
+        workmat3 = CUDA.zeros(T,psd_dim,psd_dim,n_psd)
+        workvec  = CUDA.zeros(T,triangular_number(psd_dim)*n_psd)
+
+        α = CuVector{T}(undef,max(max_linear,n_soc,n_exp,n_pow,n_psd)) #workspace for step size calculation
 
         return new(cones,type_counts,numel,degree,CuVector(cpucones.rng_cones),CuVector(cpucones.rng_blocks),_is_symmetric,
                 n_linear,idx_eq,idx_inq,
                 w,λ,η,
                 αp,H_dual,Hs,grad,
+                psd_dim,chol1,chol2,SVD,λpsd,Λisqrt,R,Rinv,Hspsd,workmat1,workmat2,workmat3,workvec,
                 α)
     end
 end

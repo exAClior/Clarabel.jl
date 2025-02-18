@@ -489,6 +489,19 @@ function MOIU.IndexMap(dest::Optimizer, src::MOI.ModelLike)
         end
     end
 
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        MOI.supports_constraint(dest, F, S) || throw(MOI.UnsupportedConstraint{F, S}())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci in cis_src
+            set = MOI.get(src, MOI.ConstraintSet(), ci)
+            #Process positive semidefinite cones
+            if typeof(set) <: MOI.Scaled{MOI.PositiveSemidefiniteConeTriangle}
+                i += 1
+                idxmap[ci] = MOI.ConstraintIndex{F, S}(i)
+            end
+        end
+    end
+
     return idxmap
 end
 
@@ -559,6 +572,20 @@ function assign_constraint_row_ranges!(
             set = MOI.get(src, MOI.ConstraintSet(), ci_src)
             #Process other cones
             if typeof(set) <: MOI.PowerCone
+                ci_dest = idxmap[ci_src]
+                endrow = startrow + MOI.dimension(set) - 1
+                rowranges[ci_dest.value] = startrow : endrow
+                startrow = endrow + 1
+            end
+        end
+    end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci_src in cis_src
+            set = MOI.get(src, MOI.ConstraintSet(), ci_src)
+            #Process other cones
+            if typeof(set) <: MOI.Scaled{MOI.PositiveSemidefiniteConeTriangle}
                 ci_dest = idxmap[ci_src]
                 endrow = startrow + MOI.dimension(set) - 1
                 rowranges[ci_dest.value] = startrow : endrow
@@ -671,7 +698,7 @@ function push_constraint!(
         for ci in cis_src
             s = MOI.get(src, MOI.ConstraintSet(), ci)
             f = MOI.get(src, MOI.ConstraintFunction(), ci)
-            #Other cones
+            #Second-order cones
             if typeof(s) == MOI.SecondOrderCone
                 rows = constraint_rows(rowranges, idxmap[ci])
                 push_constraint_constant!(b, rows, f, s)
@@ -686,7 +713,7 @@ function push_constraint!(
         for ci in cis_src
             s = MOI.get(src, MOI.ConstraintSet(), ci)
             f = MOI.get(src, MOI.ConstraintFunction(), ci)
-            #Other cones
+            #Exponential cones
             if typeof(s) == MOI.ExponentialCone
                 rows = constraint_rows(rowranges, idxmap[ci])
                 push_constraint_constant!(b, rows, f, s)
@@ -701,8 +728,23 @@ function push_constraint!(
         for ci in cis_src
             s = MOI.get(src, MOI.ConstraintSet(), ci)
             f = MOI.get(src, MOI.ConstraintFunction(), ci)
-            #Other cones
+            #Power cones
             if typeof(s) <: MOI.PowerCone
+                rows = constraint_rows(rowranges, idxmap[ci])
+                push_constraint_constant!(b, rows, f, s)
+                push_constraint_linear!(triplet, f, rows, idxmap, s)
+                push_constraint_set!(cone_spec, rows, s)
+            end
+        end
+    end
+
+    for (F, S) in MOI.get(src, MOI.ListOfConstraintTypesPresent())
+        cis_src = MOI.get(src, MOI.ListOfConstraintIndices{F, S}())
+        for ci in cis_src
+            s = MOI.get(src, MOI.ConstraintSet(), ci)
+            f = MOI.get(src, MOI.ConstraintFunction(), ci)
+            #Positive semidefinite cones
+            if typeof(s) <: MOI.Scaled{MOI.PositiveSemidefiniteConeTriangle}
                 rows = constraint_rows(rowranges, idxmap[ci])
                 push_constraint_constant!(b, rows, f, s)
                 push_constraint_linear!(triplet, f, rows, idxmap, s)
@@ -794,8 +836,8 @@ function push_constraint_set!(
     # handle ExponentialCone differently because it
     # doesn't take dimension as a parameter (always 3)
     if isa(s,MOI.ExponentialCone)
-        pow_cone_type = MOItoClarabelCones[MOI.ExponentialCone]
-        push!(cone_spec, pow_cone_type())
+        exp_cone_type = MOItoClarabelCones[MOI.ExponentialCone]
+        push!(cone_spec, exp_cone_type())
         return nothing
     end
 

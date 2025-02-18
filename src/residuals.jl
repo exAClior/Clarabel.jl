@@ -63,7 +63,7 @@ function residuals_update_gpu!(
 
   #complete the residuals
   @. residuals.rx = residuals.rx_inf - residuals.Px - data.q_gpu * variables.τ
-  @. residuals.rz = residuals.rz_inf - data.b_gpu * variables.τ
+  CUDA.@sync @. residuals.rz = residuals.rz_inf - data.b_gpu * variables.τ
   residuals.rτ    = qx + bz + variables.κ + xPx/variables.τ
 
   #save local versions

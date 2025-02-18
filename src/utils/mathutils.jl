@@ -226,11 +226,9 @@ function rscale!(M::SparseMatrixCSC{T}, R::AbstractVector{T}) where {T <: Abstra
 end
 
 # dense version 
-function lrscale!(L::AbstractVector{T},M::Matrix{T},R::AbstractVector{T}) where {T <: AbstractFloat}
+@inline function lrscale!(L::AbstractVector{T},M::AbstractMatrix{T},R::AbstractVector{T}) where {T <: AbstractFloat}
 
     m, n = size(M)
-    (n == length(R)) || throw(DimensionMismatch())
-    (m == length(L)) || throw(DimensionMismatch())
 
     @inbounds for i = 1:m, j = 1:n
             M[i,j] *= L[i]*R[j]
@@ -239,15 +237,14 @@ function lrscale!(L::AbstractVector{T},M::Matrix{T},R::AbstractVector{T}) where 
 end 
 
 # Set A = (A + A') / 2.  Assumes A is real
-function symmetric_part!(A::Matrix{T}) where T <: Real
+@inline function symmetric_part!(A::AbstractMatrix{T}) where T <: Real
     n  = LinearAlgebra.checksquare(A)
     @inbounds for r in 1:n
         for c in 1:r-1
             val = (A[r, c] + A[c, r]) / 2
             A[r,c] = A[c,r] = val
         end
-    end
-    return A
+    end  
 end
 
 

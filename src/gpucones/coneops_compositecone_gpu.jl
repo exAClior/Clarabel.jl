@@ -54,7 +54,9 @@ function margins(
 
     n_linear = cones.n_linear
     n_soc = get_type_count(cones,SecondOrderCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
     rng_cones = cones.rng_cones
+    Z = cones.workmat1
 
     α = cones.α
     @. α = αmin
@@ -83,6 +85,19 @@ function margins(
         β += sum(αsoc)
     end
 
+    if n_psd > 0
+        n_shift = n_linear + n_soc
+
+        svec_to_mat_gpu!(Z,z,rng_cones,n_shift,n_psd)
+
+        # Batched SVD decomposition
+        # YC: memory of e can be optimized later
+        e = CUDA.CUSOLVER.syevjBatched!('N','U',Z)      #'N' returns eigenvalues only; 'V' returns both eigenvalues and eigenvectors
+        αmin = min(αmin,minimum(e))
+        @. e = max(e,zero(T))
+        β += sum(e)
+    end
+
     return (αmin,β)
 end
 
@@ -95,6 +110,8 @@ function scaled_unit_shift!(
 
     n_linear = cones.n_linear
     n_soc = get_type_count(cones,SecondOrderCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
+    psd_dim = cones.psd_dim
     rng_cones = cones.rng_cones
 
     CUDA.@allowscalar begin
@@ -118,6 +135,16 @@ function scaled_unit_shift!(
         CUDA.@sync kernel(z,α,rng_cones,n_linear,n_soc; threads, blocks)
     end
 
+    if n_psd > 0
+        n_shift = n_linear + n_soc
+        kernel = @cuda launch=false _kernel_scaled_unit_shift_psd!(z,α,rng_cones,psd_dim,n_shift,n_psd)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_psd, config.threads)
+        blocks = cld(n_psd, threads)
+
+        CUDA.@sync kernel(z,α,rng_cones,psd_dim,n_shift,n_psd; threads, blocks)
+    end
+
     return nothing
 
 end
@@ -138,6 +165,9 @@ function unit_initialization!(
     n_soc = get_type_count(cones,SecondOrderCone)
     n_exp = get_type_count(cones,ExponentialCone)
     n_pow = get_type_count(cones,PowerCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
+    psd_dim = cones.psd_dim
+
     αp = cones.αp
     rng_cones = cones.rng_cones
 
@@ -182,6 +212,11 @@ function unit_initialization!(
         CUDA.@sync kernel(z,s,αp,rng_cones,n_shift,n_pow; threads, blocks)
     end
 
+    if n_psd > 0
+        n_shift = n_linear+n_soc+n_exp+n_pow
+        unit_initialization_psd_gpu!(z,s,rng_cones,psd_dim,n_shift,n_psd)
+    end
+
     return nothing
 
 end
@@ -192,9 +227,14 @@ function set_identity_scaling!(
 
     n_linear = cones.n_linear
     n_soc = get_type_count(cones,SecondOrderCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
     rng_cones = cones.rng_cones
     w = cones.w
     η = cones.η
+    R = cones.R
+    Rinv = cones.Rinv
+    Hspsd = cones.Hspsd
+    psd_dim = cones.psd_dim
     
     CUDA.@allowscalar for i in cones.idx_inq
         @views set_identity_scaling_nonnegative!(w[rng_cones[i]])
@@ -207,6 +247,15 @@ function set_identity_scaling!(
         blocks = cld(n_soc, threads)
 
         CUDA.@sync kernel(w,η,rng_cones,n_linear,n_soc; threads, blocks)
+    end
+
+    if n_psd > 0
+        kernel = @cuda launch=false _kernel_set_identity_scaling_psd!(R,Rinv,Hspsd,psd_dim,n_psd)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_psd, config.threads)
+        blocks = cld(n_psd, threads)
+
+        CUDA.@sync kernel(R,Rinv,Hspsd,psd_dim,n_psd; threads, blocks)
     end
 
     return nothing
@@ -224,6 +273,7 @@ function update_scaling!(
     n_soc = get_type_count(cones,SecondOrderCone)
     n_exp = get_type_count(cones,ExponentialCone)
     n_pow = get_type_count(cones,PowerCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
     αp = cones.αp
     grad = cones.grad
     Hs = cones.Hs
@@ -271,10 +321,64 @@ function update_scaling!(
         CUDA.@sync kernel(s,z,grad,Hs,H_dual,αp,rng_cones,μ,scaling_strategy,n_shift,n_exp,n_pow; threads, blocks)
     end
 
+    if n_psd > 0
+        L1 = cones.chol1
+        L2 = cones.chol2
+
+        n_shift = n_linear+n_soc+n_exp+n_pow
+
+        svec_to_mat_gpu!(L2,z,rng_cones,n_shift,n_psd)
+        svec_to_mat_gpu!(L1,s,rng_cones,n_shift,n_psd)
+
+        _, infoz = potrfBatched!(L2, 'L')
+        _, infos = potrfBatched!(L1, 'L')
+
+        # YC: This is an issue related to the batched Cholesky factorization in CUSOLVER,
+        # which fills in both lower and upper triangular of each submatrix during factorization
+        #Set upper triangular parts to 0
+        mask_zeros!(L2, 'U')
+        mask_zeros!(L1, 'U')
+
+        # bail if the cholesky factorization fails
+        if !(all(==(0), infoz) && all(==(0), infos))
+            return is_scaling_success = false
+        end
+
+        #SVD of L2'*L1,
+        tmp = cones.workmat1;
+        CUDA.CUBLAS.gemm_strided_batched!('T', 'N', one(T), L2, L1, zero(T), tmp)
+        U, S, V = CUDA.CUSOLVER.gesvdj!('V', tmp)
+
+        #assemble λ (diagonal), R and Rinv.
+        λpsd = cones.λpsd
+        Λisqrt = cones.Λisqrt
+        copyto!(λpsd, S)
+        CUDA.@sync @. Λisqrt = inv.(sqrt.(λpsd))
+
+        #R = L1*(V)*Λisqrt  Λisqrt is a diagonal matrix for each psd cone
+        R = cones.R
+        Rinv = cones.Rinv
+        CUDA.CUBLAS.gemm_strided_batched!('N', 'N', one(T), L1, V, zero(T), R)
+        right_mul_batched!(R,Λisqrt,R)
+
+        #Rinv = Λisqrt*(U)'*L2'
+        CUDA.CUBLAS.gemm_strided_batched!('T', 'T', one(T), U, L2, zero(T), Rinv)
+        left_mul_batched!(Λisqrt,Rinv,Rinv)
+
+        #compute R*R' (upper triangular part only)
+        RRt = cones.workmat1;
+        fill!(RRt, zero(T))
+        CUDA.CUBLAS.gemm_strided_batched!('N', 'T', one(T), R, R, zero(T), RRt)
+
+        #YC: RRt may not be symmetric, not sure how much effect it will be
+        Hspsd = cones.Hspsd
+        skron_batched!(Hspsd,RRt)
+    end
+
     return is_scaling_success = true
 end
 
-# The Hs block for each cone.
+# Update Hs block for each cone.
 function get_Hs!(
     cones::CompositeConeGPU{T},
     Hsblocks::AbstractVector{T}
@@ -284,7 +388,9 @@ function get_Hs!(
     n_soc = get_type_count(cones,SecondOrderCone)
     n_exp = get_type_count(cones,ExponentialCone)
     n_pow = get_type_count(cones,PowerCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
     Hs = cones.Hs
+    Hspsd = cones.Hspsd
     rng_blocks = cones.rng_blocks
     rng_cones = cones.rng_cones
     w = cones.w
@@ -327,6 +433,17 @@ function get_Hs!(
 
         CUDA.@sync kernel(Hsblocks,Hs,rng_blocks,n_shift,n_exp,n_pow; threads, blocks)
     end
+
+    if n_psd > 0
+        n_shift = n_linear+n_soc+n_exp+n_pow
+        kernel = @cuda launch=false _kernel_get_Hs_psd!(Hsblocks,Hspsd,rng_blocks,n_shift,n_psd)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_psd, config.threads)
+        blocks = cld(n_psd, threads)
+
+        CUDA.@sync kernel(Hsblocks,Hspsd,rng_blocks,n_shift,n_psd; threads, blocks)
+    end
+
     return nothing
 end
 
@@ -345,6 +462,8 @@ function mul_Hs!(
     n_soc = get_type_count(cones,SecondOrderCone)
     n_exp = get_type_count(cones,ExponentialCone)
     n_pow = get_type_count(cones,PowerCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
+    psd_dim = cones.psd_dim
     Hs = cones.Hs
     rng_cones = cones.rng_cones
     w = cones.w
@@ -380,6 +499,25 @@ function mul_Hs!(
         CUDA.@sync kernel(y,Hs,x,rng_cones,n_shift,n_nonsymmetric; threads, blocks)
     end
 
+    if n_psd > 0
+        n_shift = n_linear+n_soc+n_exp+n_pow
+
+        CUDA.@allowscalar rng = rng_cones[n_shift+1].start:rng_cones[n_shift+n_psd].stop
+
+        #Transform it into the matrix form 
+        @views tmpx = x[rng]
+        @views tmpy = y[rng]
+
+        n_tri_dim = triangular_number(psd_dim)
+        n_psd_int64 = Int64(n_psd)
+
+        X = reshape(tmpx, (n_tri_dim, n_psd_int64))
+        Y = reshape(tmpy, (n_tri_dim, n_psd_int64))
+
+        Hspsd = cones.Hspsd
+        CUDA.CUBLAS.gemv_strided_batched!('N',1.0,Hspsd,X,0.0,Y)
+    end
+
     return nothing
 end
 
@@ -394,6 +532,7 @@ function affine_ds!(
     n_soc = get_type_count(cones,SecondOrderCone)
     n_exp = get_type_count(cones,ExponentialCone)
     n_pow = get_type_count(cones,PowerCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
     rng_cones = cones.rng_cones
     λ = cones.λ
 
@@ -418,10 +557,19 @@ function affine_ds!(
 
     #update nonsymmetric cones
     if n_exp+n_pow > 0
-        start_ind = length(cones.w)+1
+        n_shift = n_linear + n_soc
+        CUDA.@allowscalar begin
+            rng = rng_cones[n_shift+1].start:rng_cones[n_shift+n_exp+n_pow].stop
+        end
 
-        @. ds[start_ind:end] = s[start_ind:end]
-        CUDA.synchronize()
+        CUDA.@sync @. ds[rng] = s[rng]
+    end
+
+    if n_psd > 0
+        n_shift = n_linear + n_soc + n_exp + n_pow
+        psd_dim = cones.psd_dim
+        λpsd = cones.λpsd
+        affine_ds_psd_gpu!(ds,λpsd,rng_cones,psd_dim,n_shift,n_psd)
     end
 
     return nothing
@@ -440,6 +588,7 @@ function combined_ds_shift!(
     n_soc = get_type_count(cones,SecondOrderCone)
     n_exp = get_type_count(cones,ExponentialCone)
     n_pow = get_type_count(cones,PowerCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
     grad = cones.grad
     H_dual = cones.H_dual
     αp = cones.αp
@@ -447,6 +596,8 @@ function combined_ds_shift!(
     w = cones.w
     η = cones.η
 
+    CUDA.synchronize()
+    
     CUDA.@allowscalar begin
         for i in cones.idx_eq
             @views combined_ds_shift_zero!(shift[rng_cones[i]])
@@ -485,6 +636,11 @@ function combined_ds_shift!(
 
         CUDA.@sync kernel(shift,step_z,step_s,z,grad,H_dual,αp,rng_cones,σμ,n_shift,n_exp,n_pow; threads, blocks)
     end
+    
+    if n_psd > 0 
+        n_shift = n_linear+n_soc+n_exp+n_pow
+        combined_ds_shift_psd!(cones,shift,step_z,step_s,n_shift,n_psd,σμ)
+    end
 
     return nothing
 
@@ -502,6 +658,7 @@ function Δs_from_Δz_offset!(
     n_soc = get_type_count(cones,SecondOrderCone)
     n_exp = get_type_count(cones,ExponentialCone)
     n_pow = get_type_count(cones,PowerCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
     rng_cones = cones.rng_cones
     w = cones.w
     λ = cones.λ
@@ -532,6 +689,11 @@ function Δs_from_Δz_offset!(
         CUDA.synchronize()
     end
 
+    if n_psd > 0
+        n_shift = n_linear+n_soc+n_exp+n_pow
+        Δs_from_Δz_offset_psd!(cones, out, ds, work, n_shift, n_psd)
+    end
+
     return nothing
 end
 
@@ -550,6 +712,7 @@ function step_length(
     n_soc = get_type_count(cones,SecondOrderCone)
     n_exp = get_type_count(cones,ExponentialCone)
     n_pow = get_type_count(cones,PowerCone)
+    n_psd = get_type_count(cones,PSDTriangleCone)
     rng_cones       = cones.rng_cones
     α               = cones.α
     αp              = cones.αp
@@ -578,11 +741,37 @@ function step_length(
         end
     end
 
+    if n_psd > 0
+        n_shift = n_linear+n_soc+n_exp+n_pow
+
+        Λisqrt = cones.Λisqrt
+        d      = cones.workvec
+        Rx     = cones.R
+        Rinv   = cones.Rinv
+        workΔ  = cones.workmat1
+        (workmat1, workmat2, workmat3) = (cones.workmat1, cones.workmat2, cones.workmat3)
+
+        #d = Δz̃ = WΔz
+        # We need an extra parameter since the dimension of d is not equal to that of dz
+        # αz = step_length_psd_component(workΔ,d,Λisqrt,αmax)
+        mul_Wx_psd!(d, dz, Rx, rng_cones, workmat1, workmat2, workmat3, n_shift, n_psd, true)
+        αz = step_length_psd_component_gpu(workΔ,d,Λisqrt,n_psd,αmax)
+        
+        #d = Δs̃ = W^{-T}Δs
+        mul_WTx_psd!(d, ds, Rinv, rng_cones, workmat1, workmat2, workmat3, n_shift, n_psd, true)
+        αs = step_length_psd_component_gpu(workΔ,d,Λisqrt,n_psd,αmax)
+        @views αmax = min(αmax,αz,αs)
+
+        if αmax < 0
+            throw(DomainError("starting point of line search not in positive semidefinite cones"))
+        end
+    end
+
     step = settings.linesearch_backtrack_step
     αmin = settings.min_terminate_step_length
     #if we have any nonsymmetric cones, then back off from full steps slightly
     #so that centrality checks and logarithms don't fail right at the boundaries
-    if(!is_symmetric(cones))
+    if(n_exp + n_pow > 0)
         αmax = min(αmax,settings.max_step_fraction)
     end
   
@@ -596,7 +785,7 @@ function step_length(
         CUDA.@sync kernel(dz,ds,z,s,α,rng_cones,αmax,αmin,step,n_shift,n_exp; threads, blocks)
         @views αmax = min(αmax,minimum(α[1:n_exp]))
         if αmax < 0
-            throw(DomainError("starting point of line search not in SOC"))
+            throw(DomainError("starting point of line search not in expotential cones"))
         end
     end
 
@@ -610,7 +799,7 @@ function step_length(
         CUDA.@sync kernel(dz,ds,z,s,α,αp,rng_cones,αmax,αmin,step,n_shift,n_pow; threads, blocks)
         @views αmax = min(αmax,minimum(α[1:n_pow]))
         if αmax < 0
-            throw(DomainError("starting point of line search not in SOC"))
+            throw(DomainError("starting point of line search not in power cones"))
         end
     end
 

@@ -127,7 +127,6 @@ function _kernel_get_Hs_pow!(
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
     if i <= n_pow
-        # update both gradient and Hessian for function f*(z) at the point z
         shift_i = i + n_shift
         rng_i = rng_blocks[shift_i]
         shift_exp = n_exp+i

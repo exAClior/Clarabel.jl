@@ -162,6 +162,7 @@ function kkt_solve!(
     end
 
     @. workz = Δs_const_term - rhs.z
+    CUDA.synchronize()
 
 
     #---------------------------------------------------
