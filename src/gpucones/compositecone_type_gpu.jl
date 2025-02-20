@@ -24,6 +24,10 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     # the flag for symmetric cone check
     _is_symmetric::Bool
     n_linear::Cint
+    n_soc::Cint
+    n_exp::Cint
+    n_pow::Cint
+    n_psd::Cint
 
     idx_eq::Vector{Cint}
     idx_inq::Vector{Cint}
@@ -40,7 +44,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     grad::AbstractArray{T}         #gradient of the dual barrier at z 
 
     #PSD cone
-    psd_dim::Int32                  #We only support PSD cones with the same small dimension
+    psd_dim::Cint                  #We only support PSD cones with the same small dimension
     chol1::AbstractArray{T,3}
     chol2::AbstractArray{T,3}
     SVD::AbstractArray{T,3}
@@ -134,7 +138,8 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         α = CuVector{T}(undef,max(max_linear,n_soc,n_exp,n_pow,n_psd)) #workspace for step size calculation
 
         return new(cones,type_counts,numel,degree,CuVector(cpucones.rng_cones),CuVector(cpucones.rng_blocks),_is_symmetric,
-                n_linear,idx_eq,idx_inq,
+                n_linear, n_soc, n_exp, n_pow, n_psd,
+                idx_eq,idx_inq,
                 w,λ,η,
                 αp,H_dual,Hs,grad,
                 psd_dim,chol1,chol2,SVD,λpsd,Λisqrt,R,Rinv,Hspsd,workmat1,workmat2,workmat3,workvec,

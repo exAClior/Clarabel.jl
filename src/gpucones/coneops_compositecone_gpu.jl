@@ -12,14 +12,6 @@ function is_symmetric(cones::CompositeConeGPU{T}) where {T}
     return cones._is_symmetric
 end
 
-# function is_sparse_expandable(cones::CompositeCone{T}) where {T}
-    
-#     #This should probably never be called
-#     #any(is_sparse_expandable, cones)
-#     ErrorException("This function should not be reachable")
-    
-# end
-
 function allows_primal_dual_scaling(cones::CompositeConeGPU{T}) where {T}
     all(allows_primal_dual_scaling, cones)
 end
@@ -53,8 +45,8 @@ function margins(
     β = zero(T)
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_psd = cones.n_psd
     rng_cones = cones.rng_cones
     Z = cones.workmat1
 
@@ -95,6 +87,7 @@ function margins(
         e = CUDA.CUSOLVER.syevjBatched!('N','U',Z)      #'N' returns eigenvalues only; 'V' returns both eigenvalues and eigenvectors
         αmin = min(αmin,minimum(e))
         @. e = max(e,zero(T))
+        CUDA.synchronize()
         β += sum(e)
     end
 
@@ -109,8 +102,8 @@ function scaled_unit_shift!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_psd = cones.n_psd
     psd_dim = cones.psd_dim
     rng_cones = cones.rng_cones
 
@@ -156,16 +149,11 @@ function unit_initialization!(
     s::AbstractVector{T}
 ) where {T}
 
-    # for (cone,zi,si) in zip(cones,z.views,s.views)
-    #     @conedispatch unit_initialization!(cone,zi,si)
-    # end
-    # return nothing
-
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_exp = get_type_count(cones,ExponentialCone)
-    n_pow = get_type_count(cones,PowerCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
     psd_dim = cones.psd_dim
 
     αp = cones.αp
@@ -226,8 +214,8 @@ function set_identity_scaling!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_psd = cones.n_psd
     rng_cones = cones.rng_cones
     w = cones.w
     η = cones.η
@@ -270,10 +258,10 @@ function update_scaling!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_exp = get_type_count(cones,ExponentialCone)
-    n_pow = get_type_count(cones,PowerCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
     αp = cones.αp
     grad = cones.grad
     Hs = cones.Hs
@@ -385,10 +373,10 @@ function get_Hs!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_exp = get_type_count(cones,ExponentialCone)
-    n_pow = get_type_count(cones,PowerCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
     Hs = cones.Hs
     Hspsd = cones.Hspsd
     rng_blocks = cones.rng_blocks
@@ -459,10 +447,10 @@ function mul_Hs!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_exp = get_type_count(cones,ExponentialCone)
-    n_pow = get_type_count(cones,PowerCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
     psd_dim = cones.psd_dim
     Hs = cones.Hs
     rng_cones = cones.rng_cones
@@ -529,10 +517,10 @@ function affine_ds!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_exp = get_type_count(cones,ExponentialCone)
-    n_pow = get_type_count(cones,PowerCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
     rng_cones = cones.rng_cones
     λ = cones.λ
 
@@ -585,10 +573,10 @@ function combined_ds_shift!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_exp = get_type_count(cones,ExponentialCone)
-    n_pow = get_type_count(cones,PowerCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
     grad = cones.grad
     H_dual = cones.H_dual
     αp = cones.αp
@@ -655,10 +643,10 @@ function Δs_from_Δz_offset!(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_exp = get_type_count(cones,ExponentialCone)
-    n_pow = get_type_count(cones,PowerCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
     rng_cones = cones.rng_cones
     w = cones.w
     λ = cones.λ
@@ -709,10 +697,10 @@ function step_length(
 ) where {T}
 
     n_linear = cones.n_linear
-    n_soc = get_type_count(cones,SecondOrderCone)
-    n_exp = get_type_count(cones,ExponentialCone)
-    n_pow = get_type_count(cones,PowerCone)
-    n_psd = get_type_count(cones,PSDTriangleCone)
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
     rng_cones       = cones.rng_cones
     α               = cones.α
     αp              = cones.αp
