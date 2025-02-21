@@ -672,8 +672,11 @@ function Δs_from_Δz_offset!(
     end
 
     if n_exp+n_pow > 0
-        start_ind = length(w)+1
-        @. out[start_ind:end] = ds[start_ind:end]
+        n_shift = n_linear + n_soc
+        CUDA.@allowscalar begin
+            rng = rng_cones[n_shift+1].start:rng_cones[n_shift+n_exp+n_pow].stop
+        end
+        @. out[rng] = ds[rng]
         CUDA.synchronize()
     end
 
@@ -711,8 +714,13 @@ function step_length(
         for i in cones.idx_inq
             len_nn = Cint(length(rng_cones[i]))
             rng_cone_i = rng_cones[i]
-            @views αi = step_length_nonnegative(dz[rng_cone_i],ds[rng_cone_i],z[rng_cone_i],s[rng_cone_i],α[1:len_nn],len_nn,αmax)
-            αmax = min(αmax,αi)
+            @views dzi = dz[rng_cone_i]
+            @views dsi = ds[rng_cone_i]
+            @views zi = z[rng_cone_i]
+            @views si = s[rng_cone_i]
+            @views αi = α[rng_cone_i]
+            αc = step_length_nonnegative(dzi,dsi,zi,si,αi,len_nn,αmax)
+            αmax = min(αmax,αc)
         end
     end
 
@@ -794,27 +802,59 @@ function step_length(
     return (αmax,αmax)
 end
 
-# # compute the total barrier function at the point (z + α⋅dz, s + α⋅ds)
-# function compute_barrier(
-#     cones::CompositeCone{T},
-#     z::AbstractVector{T},
-#     s::AbstractVector{T},
-#     dz::AbstractVector{T},
-#     ds::AbstractVector{T},
-#     α::T
-# ) where {T}
+# compute the total barrier function at the point (z + α⋅dz, s + α⋅ds)
+function compute_barrier(
+    cones::CompositeConeGPU{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T
+) where {T}
 
-#     dz    = dz.views
-#     ds    = ds.views
-#     z     = z.views
-#     s     = s.views
+    n_linear = cones.n_linear
+    n_nn = cones.n_nn
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
+    psd_dim = cones.psd_dim
+    rng_cones = cones.rng_cones
+    αp    = cones.αp
+    workmat1 = cones.workmat1
+    workvec  = cones.workvec
 
-#     barrier = zero(T)
+    barrier = zero(T)
+    work = cones.α
+    
+    if n_nn > 0
+        val = compute_barrier_nonnegative(work, z, s, dz, ds, α, rng_cones, cones.idx_inq, n_nn)
+        barrier += val
+    end
 
-#     for (cone,zi,si,dzi,dsi) in zip(cones,z,s,dz,ds)
-#         @conedispatch barrier += compute_barrier(cone,zi,si,dzi,dsi,α)
-#     end
+    if n_soc > 0
+        val = compute_barrier_soc(work, z, s, dz, ds, α, rng_cones, n_linear, n_soc)
+        barrier += val
+    end
 
-#     return barrier
-# end
+    if n_exp > 0
+        n_shift = n_linear+n_soc
+        val = compute_barrier_exp(work, z, s, dz, ds, α, rng_cones, n_shift, n_exp)
+        barrier += val
+    end
+
+    if n_pow > 0
+        n_shift = n_linear+n_soc+n_exp
+        val = compute_barrier_pow(work, z, s, dz, ds, α, αp, rng_cones, n_shift, n_pow)
+        barrier += val
+    end
+
+    if n_psd > 0
+        n_shift = n_linear+n_soc+n_exp+n_pow
+        val = compute_barrier_psd(work, z, s, dz, ds, α, workmat1, workvec, rng_cones, psd_dim, n_shift, n_psd)
+        barrier += val
+    end
+
+    return barrier
+end
 

@@ -24,6 +24,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     # the flag for symmetric cone check
     _is_symmetric::Bool
     n_linear::Cint
+    n_nn::Cint
     n_soc::Cint
     n_exp::Cint
     n_pow::Cint
@@ -113,7 +114,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         #PSD cone
         #We require all psd cones have the same dimensionality
         psd_ind = pow_ind + n_pow
-        psd_dim = (type_counts[PSDTriangleCone] > 0) ? cones[psd_ind+1].n : 0
+        psd_dim = haskey(type_counts,PSDTriangleCone) ? cones[psd_ind+1].n : 0
         for i in 1:n_psd
             if(psd_dim != cones[psd_ind+i].n)
                 throw(DimensionMismatch("Not all positive definite cones have the same dimensionality!"))
@@ -135,10 +136,10 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         workmat3 = CUDA.zeros(T,psd_dim,psd_dim,n_psd)
         workvec  = CUDA.zeros(T,triangular_number(psd_dim)*n_psd)
 
-        α = CuVector{T}(undef,max(max_linear,n_soc,n_exp,n_pow,n_psd)) #workspace for step size calculation
+        α = CuVector{T}(undef,sum(cone -> Clarabel.numel(cone), cones; init = 0)) #workspace for step size calculation and neighborhood check
 
         return new(cones,type_counts,numel,degree,CuVector(cpucones.rng_cones),CuVector(cpucones.rng_blocks),_is_symmetric,
-                n_linear, n_soc, n_exp, n_pow, n_psd,
+                n_linear, n_nn, n_soc, n_exp, n_pow, n_psd,
                 idx_eq,idx_inq,
                 w,λ,η,
                 αp,H_dual,Hs,grad,

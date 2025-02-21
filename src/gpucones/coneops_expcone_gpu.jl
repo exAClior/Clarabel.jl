@@ -284,28 +284,65 @@ end
     return α
 end
 
-# function compute_barrier(
-#     K::ExponentialCone{T},
-#     z::AbstractVector{T},
-#     s::AbstractVector{T},
-#     dz::AbstractVector{T},
-#     ds::AbstractVector{T},
-#     α::T
-# ) where {T}
+function _kernel_compute_barrier_exp(
+    barrier::AbstractVector{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_exp::Cint
+) where {T}
 
-#     barrier = zero(T)
+    # we want to avoid allocating a vector for the intermediate 
+    # sums, so the two barrier functions are written to accept 
+    # both vectors and 3-element tuples. 
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
-#     # we want to avoid allocating a vector for the intermediate 
-#     # sums, so the two barrier functions are written to accept 
-#     # both vectors and 3-element tuples. 
-#     cur_z    = (z[1] + α*dz[1], z[2] + α*dz[2], z[3] + α*dz[3])
-#     cur_s    = (s[1] + α*ds[1], s[2] + α*ds[2], s[3] + α*ds[3])
+    if i <= n_exp
+        # update both gradient and Hessian for function f*(z) at the point z
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+        @views dzi = dz[rng_i]
+        @views dsi = ds[rng_i]
+        @views zi = z[rng_i]
+        @views si = s[rng_i]
+        
+        cur_z    = @MVector [zi[1] + α*dzi[1], zi[2] + α*dzi[2], zi[3] + α*dzi[3]]
+        cur_s    = @MVector [si[1] + α*dsi[1], si[2] + α*dsi[2], si[3] + α*dsi[3]]
+    
+        barrier_d = barrier_dual_exp(cur_z)
+        barrier_p = barrier_primal_exp(cur_s)
+        barrier[i] = barrier_d + barrier_p
+    end
 
-#     barrier += barrier_dual(K, cur_z)
-#     barrier += barrier_primal(K, cur_s)
+    return nothing
+end
 
-#     return barrier
-# end
+@inline function compute_barrier_exp(
+    barrier::AbstractVector{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_exp::Cint
+) where {T}
+
+
+    kernel = @cuda launch=false _kernel_compute_barrier_exp(barrier,z,s,dz,ds,α,rng_cones,n_shift,n_exp)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_exp, config.threads)
+    blocks = cld(n_exp, threads)
+
+    CUDA.@sync kernel(barrier,z,s,dz,ds,α,rng_cones,n_shift,n_exp; threads, blocks)
+
+    return sum(@view barrier[1:n_exp])
+end
 
 
 # # -----------------------------------------
@@ -318,32 +355,30 @@ end
 # # -----------------------------------------
 
 
-# @inline function barrier_dual(
-#     ::ExponentialCone{T},
-#     z::Union{AbstractVector{T}, NTuple{3,T}}
-# ) where {T}
+@inline function barrier_dual_exp(
+    z::AbstractVector{T}
+) where {T}
 
-#     # Dual barrier
-#     l = logsafe(-z[3]/z[1])
-#     return -logsafe(-z[3]*z[1]) - logsafe(z[2]-z[1]-z[1]*l) 
+    # Dual barrier
+    l = logsafe(-z[3]/z[1])
+    return -logsafe(-z[3]*z[1]) - logsafe(z[2]-z[1]-z[1]*l) 
 
-# end 
+end 
 
-# @inline function barrier_primal(
-#     ::ExponentialCone{T},
-#     s::Union{AbstractVector{T}, NTuple{3,T}}
-# ) where {T}
+@inline function barrier_primal_exp(
+    s::AbstractVector{T}
+) where {T}
 
-#     # Primal barrier: 
-#     # f(s) = ⟨s,g(s)⟩ - f*(-g(s))
-#     #      = -2*log(s2) - log(s3) - log((1-barω)^2/barω) - 3, 
-#     # where barω = ω(1 - s1/s2 - log(s2) - log(s3))
-#     # NB: ⟨s,g(s)⟩ = -3 = - ν
+    # Primal barrier: 
+    # f(s) = ⟨s,g(s)⟩ - f*(-g(s))
+    #      = -2*log(s2) - log(s3) - log((1-barω)^2/barω) - 3, 
+    # where barω = ω(1 - s1/s2 - log(s2) - log(s3))
+    # NB: ⟨s,g(s)⟩ = -3 = - ν
 
-#     ω = _wright_omega(1-s[1]/s[2]-logsafe(s[2]/s[3]))
-#     ω = (ω-1)*(ω-1)/ω
-#    return -logsafe(ω)-2*logsafe(s[2])-logsafe(s[3]) - 3
-# end 
+    ω = _wright_omega_gpu(1-s[1]/s[2]-logsafe(s[2]/s[3]))
+    ω = (ω-1)*(ω-1)/ω
+   return -logsafe(ω)-2*logsafe(s[2])-logsafe(s[3]) - 3
+end 
 
 
 

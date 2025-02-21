@@ -230,8 +230,7 @@ function step_length(
     end
 
     # Force symmetric cones first.   
-    α = innerfcn(α,true)
-        
+    α = innerfcn(α,false)
     #if we have any nonsymmetric cones, then back off from full steps slightly
     #so that centrality checks and logarithms don't fail right at the boundaries
     if(!is_symmetric(cones))
@@ -239,7 +238,7 @@ function step_length(
     end
 
     # now the nonsymmetric cones
-    α = innerfcn(α,false)
+    α = innerfcn(α,true)
 
     return (α,α)
 end

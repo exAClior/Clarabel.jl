@@ -292,42 +292,84 @@ end
 
 end
 
+function _kernel_logdet!(
+    barrier::AbstractVector{T},
+    fact::AbstractArray{T,3},
+    psd_dim::Cint,
+    n_psd::Cint
+) where {T}
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
-# function compute_barrier(
-#     K::PSDTriangleCone{T},
-#     z::AbstractVector{T},
-#     s::AbstractVector{T},
-#     dz::AbstractVector{T},
-#     ds::AbstractVector{T},
-#     α::T
-# ) where {T}
+    if i <= n_psd
+        val = zero(T)
+        @inbounds for k = 1:psd_dim
+            val += logsafe(fact[k,k,i])
+        end
+        barrier[i] = val + val
+    end
 
-#     barrier  = zero(T)
-#     barrier -= _logdet_barrier(K,z,dz,α)
-#     barrier -= _logdet_barrier(K,s,ds,α)
-#     return barrier 
+    return nothing
+end
 
-# end
+@inline function _logdet_barrier_psd(
+    barrier::AbstractVector{T},
+    x::AbstractVector{T},
+    dx::AbstractVector{T},
+    alpha::T,
+    workmat1::AbstractArray{T,3},
+    workvec::AbstractVector{T},
+    rng::UnitRange{Cint},
+    psd_dim::Cint,
+    n_psd::Cint
+) where {T}
 
-# function _logdet_barrier(K::PSDTriangleCone{T},x::AbstractVector{T},dx::AbstractVector{T},alpha::T) where {T}
+    Q = workmat1
+    q = workvec
 
-#     f = K.data
-#     Q = f.workmat1
-#     q = f.workvec 
+    CUDA.@sync @. q = x[rng] + alpha*dx[rng]
+    svec_to_mat_no_shift_gpu!(Q, q, n_psd)
+    _, info = potrfBatched!(Q, 'L')
 
-#     @. q  = x + alpha*dx
-#     svec_to_mat!(Q,q)
 
-#     # PG: this is allocating
-#     f.chol1 = cholesky!(Q, check = false)
+    if all(==(0), info)
+        kernel = @cuda launch=false _kernel_logdet!(barrier, Q, psd_dim, n_psd)
+        config = launch_configuration(kernel.fun)
+        threads = min(n_psd, config.threads)
+        blocks = cld(n_psd, threads)
+    
+        CUDA.@sync kernel(barrier, Q, psd_dim, n_psd; threads, blocks)
 
-#     if issuccess(f.chol1) 
-#         return logdet(f.chol1)
-#     else 
-#         return typemax(T)
-#     end 
+        return sum(@view barrier[1:n_psd])
+    else 
+        return typemax(T)
+    end
 
-# end
+end
+
+@inline function compute_barrier_psd(
+    barrier::AbstractVector{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    workmat1::AbstractArray{T,3},
+    workvec::AbstractVector{T},
+    rng_cones::AbstractVector,
+    psd_dim::Cint,
+    n_shift::Cint,
+    n_psd::Cint
+) where {T}
+
+    CUDA.@allowscalar begin
+        rng = rng_cones[n_shift+1].start:rng_cones[n_shift+n_psd].stop
+    end
+
+    barrier_d = _logdet_barrier_psd(barrier, z, dz, α, workmat1, workvec, rng, psd_dim, n_psd)
+    barrier_p = _logdet_barrier_psd(barrier, s, ds, α, workmat1, workvec, rng, psd_dim, n_psd)
+    return (- barrier_d - barrier_p)
+
+end
 
 # ---------------------------------------------
 # operations supported by symmetric cones only 

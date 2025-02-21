@@ -71,6 +71,34 @@ function variables_barrier(
     return barrier
 end
 
+function variables_barrier(
+    variables::DefaultVariables{T},
+    step::DefaultVariables{T},
+    α::T,
+    cones::CompositeConeGPU{T},
+) where {T}
+
+    central_coef = cones.degree + 1
+
+    cur_τ = variables.τ + α*step.τ
+    cur_κ = variables.κ + α*step.κ
+
+    # compute current μ, cones.α as a temporary space
+    sz = dot_shifted_gpu(cones.α,variables.z,variables.s,step.z,step.s,α)
+    μ = (sz + cur_τ*cur_κ)/central_coef
+
+    # barrier terms from gap and scalars
+    barrier = central_coef*logsafe(μ) - logsafe(cur_τ) - logsafe(cur_κ)
+
+    # barriers from the cones
+    ( z, s) = (variables.z, variables.s)
+    (dz,ds) = (step.z, step.s)
+
+    barrier += compute_barrier(cones, z, s, dz, ds, α)
+
+    return barrier
+end
+
 function shadow_centrality_check(
     variables::DefaultVariables{T},
     step::DefaultVariables{T},

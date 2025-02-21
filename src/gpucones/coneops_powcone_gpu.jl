@@ -8,31 +8,6 @@
 
 # is_symmetric(::PowerCone{T}) where {T} = false
 
-# function margins(
-#     K::PowerCone{T},
-#     z::AbstractVector{T},
-#     pd::PrimalOrDualCone
-# ) where{T}
-
-#     # We should never end up computing margins for this cone, since 
-#     # asymmetric problems should always use unit_initialization!
-#     error("This function should never be reached.");
-#     # 
-# end
-
-# function scaled_unit_shift!(
-#     K::PowerCone{T},
-#     z::AbstractVector{T},
-#     α::T,
-#     pd::PrimalOrDualCone
-# ) where{T}
-
-#     # We should never end up shifting to this cone, since 
-#     # asymmetric problems should always use unit_initialization!
-#     error("This function should never be reached.");
-#     # 
-# end
-
 function _kernel_unit_initialization_pow!(
     z::AbstractVector{T},
     s::AbstractVector{T},
@@ -61,15 +36,6 @@ function _kernel_unit_initialization_pow!(
 
     return nothing
  end
-
-# function set_identity_scaling!(
-#     K::PowerCone{T},
-# ) where {T}
-
-#     # We should never use identity scaling because 
-#     # we never want to allow symmetric initialization
-#     error("This function should never be reached.");
-# end
 
 function _kernel_update_scaling_pow!(
     s::AbstractVector{T},
@@ -308,28 +274,68 @@ end
     return α
 end
 
-# function compute_barrier(
-#     K::PowerCone{T},
-#     z::AbstractVector{T},
-#     s::AbstractVector{T},
-#     dz::AbstractVector{T},
-#     ds::AbstractVector{T},
-#     α::T
-# ) where {T}
 
-#     barrier = zero(T)
+function _kernel_compute_barrier_pow(
+    barrier::AbstractVector{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    αp::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_pow::Cint
+) where {T}
 
-#     # we want to avoid allocating a vector for the intermediate 
-#     # sums, so the two barrier functions are written to accept 
-#     # both vectors and 3-element tuples. 
-#     cur_z    = (z[1] + α*dz[1], z[2] + α*dz[2], z[3] + α*dz[3])
-#     cur_s    = (s[1] + α*ds[1], s[2] + α*ds[2], s[3] + α*ds[3])
+    # we want to avoid allocating a vector for the intermediate 
+    # sums, so the two barrier functions are written to accept 
+    # both vectors and 3-element tuples. 
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
-#     barrier += barrier_dual(K, cur_z)
-#     barrier += barrier_primal(K, cur_s)
+    if i <= n_pow
+        # update both gradient and Hessian for function f*(z) at the point z
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+        @views dzi = dz[rng_i]
+        @views dsi = ds[rng_i]
+        @views zi = z[rng_i]
+        @views si = s[rng_i]
+        
+        cur_z    = @MVector [zi[1] + α*dzi[1], zi[2] + α*dzi[2], zi[3] + α*dzi[3]]
+        cur_s    = @MVector [si[1] + α*dsi[1], si[2] + α*dsi[2], si[3] + α*dsi[3]]
+    
+        barrier_d = barrier_dual_pow(cur_z, αp[i])
+        barrier_p = barrier_primal_pow(cur_s, αp[i])
+        barrier[i] = barrier_d + barrier_p
+    end
 
-#     return barrier
-# end
+    return nothing
+end
+
+@inline function compute_barrier_pow(
+    barrier::AbstractVector{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    αp::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_pow::Cint
+) where {T}
+
+
+    kernel = @cuda launch=false _kernel_compute_barrier_pow(barrier,z,s,dz,ds,α,αp,rng_cones,n_shift,n_pow)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_pow, config.threads)
+    blocks = cld(n_pow, threads)
+
+    CUDA.@sync kernel(barrier,z,s,dz,ds,α,αp,rng_cones,n_shift,n_pow; threads, blocks)
+
+    return sum(@view barrier[1:n_pow])
+end
 
 
 # # ----------------------------------------------
@@ -343,36 +349,34 @@ end
 # # and stores the result at g
 
 
-# @inline function barrier_dual(
-#     K::PowerCone{T},
-#     z::Union{AbstractVector{T}, NTuple{3,T}}
-# ) where {T}
+@inline function barrier_dual_pow(
+    z::AbstractVector{T}, 
+    α::T
+) where {T}
 
-#     # Dual barrier
-#     α = K.α
-#     return -logsafe((z[1]/α)^(2*α) * (z[2]/(1-α))^(2-2*α) - z[3]*z[3]) - (1-α)*logsafe(z[1]) - α*logsafe(z[2])
+    # Dual barrier
+    return -logsafe((z[1]/α)^(2*α) * (z[2]/(1-α))^(2-2*α) - z[3]*z[3]) - (1-α)*logsafe(z[1]) - α*logsafe(z[2])
 
-# end
+end
 
-# @inline function barrier_primal(
-#     K::PowerCone{T},
-#     s::Union{AbstractVector{T}, NTuple{3,T}}
-# ) where {T}
+@inline function barrier_primal_pow(
+    s::AbstractVector{T}, 
+    α::T
+) where {T}
 
-#     # Primal barrier: f(s) = ⟨s,g(s)⟩ - f*(-g(s))
-#     # NB: ⟨s,g(s)⟩ = -3 = - ν
+    # Primal barrier: f(s) = ⟨s,g(s)⟩ - f*(-g(s))
+    # NB: ⟨s,g(s)⟩ = -3 = - ν
 
-#     α = K.α
-
-#     g = gradient_primal(K,s)     #compute g(s)
-#     return logsafe((-g[1]/α)^(2*α) * (-g[2]/(1-α))^(2-2*α) - g[3]*g[3]) + (1-α)*logsafe(-g[1]) + α*logsafe(-g[2]) - 3
-# end 
+    g = gradient_primal_pow(s, α)     #compute g(s)
+    return logsafe((-g[1]/α)^(2*α) * (-g[2]/(1-α))^(2-2*α) - g[3]*g[3]) + (1-α)*logsafe(-g[1]) + α*logsafe(-g[2]) - 3
+end 
 
 
 
 # Returns true if s is primal feasible
 @inline function is_primal_feasible_pow(
-    s::AbstractVector{T},α::T
+    s::AbstractVector{T}, 
+    α::T
 ) where {T}
 
     if (s[1] > 0 && s[2] > 0)
@@ -387,7 +391,9 @@ end
 
 # Returns true if s is dual feasible
 @inline function is_dual_feasible_pow(
-    z::AbstractVector{T},α::T) where {T}
+    z::AbstractVector{T}, 
+    α::T
+) where {T}
 
     if (z[1] > 0 && z[2] > 0)
         res = exp(2*α*logsafe(z[1]/α) + 2*(1-α)*logsafe(z[2]/(1-α))) - z[3]*z[3]

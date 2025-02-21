@@ -409,12 +409,11 @@ function solver_get_step_length(s::Solver{T},steptype::Symbol,scaling::ScalingSt
         s.cones, s.settings, steptype
     )
 
-    #YC: not implemented for GPU at the moment
     # additional barrier function limits for asymmetric cones
-    if (!use_gpu && !is_symmetric(s.cones) && steptype == :combined)
+    if (!is_symmetric(s.cones) && steptype == :combined && scaling == Dual)
         αinit = α
-        # α = solver_backtrack_step_to_barrier(s,αinit)
-        α = solver_backtrack_step_to_centrality(s,αinit)
+        α = solver_backtrack_step_to_barrier(s, αinit)
+        # α = solver_backtrack_step_to_centrality(s,αinit)
     end
     return α
 end
@@ -428,7 +427,7 @@ function solver_backtrack_step_to_barrier(
     step = s.settings.linesearch_backtrack_step
     α = αinit
 
-    for j = 1:50
+    for j = 1:1
         barrier = variables_barrier(s.variables,s.step_lhs,α,s.cones)
         if barrier < one(T)
             return α

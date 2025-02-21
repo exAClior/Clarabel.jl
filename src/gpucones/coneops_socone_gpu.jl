@@ -498,25 +498,58 @@ function _kernel_step_length_soc(
     return nothing
 end
 
-# function compute_barrier(
-#     K::SecondOrderCone{T},
-#     z::AbstractVector{T},
-#     s::AbstractVector{T},
-#     dz::AbstractVector{T},
-#     ds::AbstractVector{T},
-#     α::T
-# ) where {T}
+function _kernel_compute_barrier_soc(
+    barrier::AbstractVector{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    rng_cones::AbstractVector,
+    n_linear::Cint,
+    n_soc::Cint
+) where {T}
 
-#     res_s = _soc_residual_shifted(s,ds,α)
-#     res_z = _soc_residual_shifted(z,dz,α)
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
-#     # avoid numerical issue if res_s <= 0 or res_z <= 0
-#     if res_s > 0 && res_z > 0
-#         return -logsafe(res_s*res_z)/2
-#     else
-#         return Inf
-#     end
-# end
+    if i <= n_soc
+        shift_i = i + n_linear
+        rng_cone_i = rng_cones[shift_i]
+        @views si = s[rng_cone_i] 
+        @views dsi = ds[rng_cone_i] 
+        @views zi = z[rng_cone_i] 
+        @views dzi = dz[rng_cone_i]  
+        res_si = _soc_residual_shifted(si,dsi,α)
+        res_zi = _soc_residual_shifted(zi,dzi,α)
+
+        # avoid numerical issue if res_s <= 0 or res_z <= 0
+        barrier[i] = (res_si > 0 && res_zi > 0) ? -logsafe(res_si*res_zi)/2 : Inf
+    end
+
+    return nothing
+end
+
+@inline function compute_barrier_soc(
+    barrier::AbstractVector{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    rng_cones::AbstractVector,
+    n_linear::Cint,
+    n_soc::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_compute_barrier_soc(barrier,z,s,dz,ds,α,rng_cones,n_linear,n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(barrier,z,s,dz,ds,α,rng_cones,n_linear,n_soc; threads, blocks)
+
+    return sum(barrier[1:n_soc])
+end
 
 # # ---------------------------------------------
 # # operations supported by symmetric cones only 
@@ -647,20 +680,6 @@ end
         x[j] *= a 
     end
 end 
-
-# #compute the residual at z + \alpha dz 
-# #without storing the intermediate vector
-# @inline function _soc_residual_shifted(
-#     z::AbstractVector{T}, 
-#     dz::AbstractVector{T}, 
-#     α::T
-# ) where {T} 
-    
-#     x0 = z[1] + α * dz[1];
-#     @views x1_sq = dot_shifted(z[2:end],z[2:end],dz[2:end],dz[2:end],α)
-#     res = x0*x0 - x1_sq
-#     return res
-# end 
 
 # find the maximum step length α≥0 so that
 # x + αy stays in the SOC

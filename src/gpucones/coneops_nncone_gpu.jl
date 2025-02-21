@@ -148,7 +148,29 @@ function Δs_from_Δz_offset_nonnegative!(
     @. out = ds / z
 end
 
-function step_length_nonnegative(
+#return maximum allowable step length while remaining in the nn cone
+function _kernel_step_length_nonnegative(
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+     z::AbstractVector{T},
+     s::AbstractVector{T},
+     α::AbstractVector{T},
+     len_rng::Cint,
+     αmax::T
+) where {T}
+
+
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    if i <= len_rng
+        αz = dz[i] < 0 ? (min(αmax,-z[i]/dz[i])) : αmax
+        αs = ds[i] < 0 ? (min(αmax,-s[i]/ds[i])) : αmax
+        α[i] = min(αz, αs)
+    end
+
+    return nothing
+end
+
+@inline function step_length_nonnegative(
     dz::AbstractVector{T},
     ds::AbstractVector{T},
      z::AbstractVector{T},
@@ -168,45 +190,47 @@ function step_length_nonnegative(
     return minimum(α)
 end
 
-#return maximum allowable step length while remaining in the nn cone
-function _kernel_step_length_nonnegative(
+function _kernel_compute_barrier_nonnegative(
+    barrier::AbstractVector{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
     dz::AbstractVector{T},
     ds::AbstractVector{T},
-     z::AbstractVector{T},
-     s::AbstractVector{T},
-     α::AbstractVector{T},
-     len_rng::Cint,
-     αmax::T
+    α::T,
+    len_nn::Cint
 ) where {T}
 
-
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
-    if i <= len_rng
-        α[i] = dz[i] < 0 ? (min(α[i],-z[i]/dz[i])) : α[i]
-        α[i] = ds[i] < 0 ? (min(α[i],-s[i]/ds[i])) : α[i]
+    if i <= len_nn
+        barrier[i] = -logsafe((s[i] + α*ds[i])*(z[i] + α*dz[i]))
     end
 
     return nothing
 end
 
-# function compute_barrier(
-#     K::NonnegativeCone{T},
-#     z::AbstractVector{T},
-#     s::AbstractVector{T},
-#     dz::AbstractVector{T},
-#     ds::AbstractVector{T},
-#     α::T
-# ) where {T}
+@inline function compute_barrier_nonnegative(
+    work::AbstractVector{T},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    α::T,
+    rng_cones::AbstractVector,
+    idx_inq::Vector{Cint},
+    len_nn::Cint
+) where {T}
 
-#     barrier = T(0)
-#     @inbounds for i = 1:K.dim
-#         si = s[i] + α*ds[i]
-#         zi = z[i] + α*dz[i]
-#         barrier -= logsafe(si * zi)
-#     end
+    barrier = zero(T)
+    CUDA.@allowscalar for i in idx_inq
+        rng_cone_i = rng_cones[i]
+        @views worki = work[rng_cone_i]
+        @views @. worki = -logsafe((s[rng_cone_i] + α*ds[rng_cone_i])*(z[rng_cone_i] + α*dz[rng_cone_i]))
+        CUDA.synchronize()
+        barrier += sum(worki)
+    end
 
-#     return barrier
-# end
+    return barrier
+end
 
 # # ---------------------------------------------
 # # operations supported by symmetric cones only 

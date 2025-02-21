@@ -5,6 +5,49 @@ import CUDA: unsafe_free!
 using LinearAlgebra.LAPACK: chkargsok, chklapackerror, chktrans, chkside, chkdiag, chkuplo
 # using Libdl
 
+
+#############################################
+# dot operator
+# NT: can be possibly optimized when using the shared memory
+#############################################
+function _kernel_dot_shifted_gpu(
+    work::AbstractVector{T},
+    z::AbstractVector{T}, 
+    s::AbstractVector{T},
+    dz::AbstractVector{T}, 
+    ds::AbstractVector{T},
+    α::T
+) where {T<:Real}
+    i = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    if i <= length(z)
+        zi = z[i] + α * dz[i]
+        si = s[i] + α * ds[i]
+        work[i] = zi * si
+    end
+
+    return nothing
+end
+
+@inline function dot_shifted_gpu(
+    work::AbstractVector{T},
+    z::AbstractVector{T}, 
+    s::AbstractVector{T},
+    dz::AbstractVector{T}, 
+    ds::AbstractVector{T},
+    α::T
+) where {T<:Real}
+    
+    n = length(work)
+    kernel = @cuda launch=false _kernel_dot_shifted_gpu(work, z, s, dz, ds, α)
+    config = launch_configuration(kernel.fun)
+    threads = min(n, config.threads)
+    blocks = cld(n, threads)
+    
+    CUDA.@sync kernel(work, z, s, dz, ds, α; threads, blocks)
+    
+    return sum(work)
+end
+
 #############################################
 # Batched Cholesky (in-place decomposition)
 #############################################
