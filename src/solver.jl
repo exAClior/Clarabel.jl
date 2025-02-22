@@ -410,7 +410,7 @@ function solver_get_step_length(s::Solver{T},steptype::Symbol,scaling::ScalingSt
     )
 
     # additional barrier function limits for asymmetric cones
-    if (!is_symmetric(s.cones) && steptype == :combined && scaling == Dual)
+    if (!is_symmetric(s.cones) && steptype == :combined && scaling == Dual::ScalingStrategy)
         αinit = α
         α = solver_backtrack_step_to_barrier(s, αinit)
         # α = solver_backtrack_step_to_centrality(s,αinit)

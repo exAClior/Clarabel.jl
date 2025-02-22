@@ -24,105 +24,115 @@
 #     return false
 # end
 
-# function margins(
-#     K::ZeroCone{T},
-#     z::AbstractVector{T},
-#     pd::PrimalOrDualCone
-# ) where{T}
-
-#     #for either primal or dual case we specify infinite 
-#     #minimum margin and zero total margin.   
-#     #if we later shift a vector into the zero cone 
-#     #using scaled_unit_shift!, we just zero it 
-#     #out regardless of the applied shift anway 
-#     return (floatmax(T),zero(T))
-# end
-
 # place vector into zero cone
-function scaled_unit_shift_zero!(
+@inline function scaled_unit_shift_zero!(
     z::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_eq::Vector{Cint},
     pd::PrimalOrDualCone
 ) where{T}
 
-    if pd == PrimalCone::PrimalOrDualCone #zero cone
-        @. z = zero(T)
-    else 
-        () #Re^n.  do nothing 
+    CUDA.@allowscalar begin
+        for i in idx_eq
+            rng_cone_i = rng_cones[i]
+            if pd == PrimalCone::PrimalOrDualCone #zero cone
+                @views @. z[rng_cone_i] = zero(T)
+            end
+        end
     end
-
+    CUDA.synchronize()
 end
 
 # unit initialization for asymmetric solves
-function unit_initialization_zero!(
+@inline function unit_initialization_zero!(
 	z::AbstractVector{T},
-    s::AbstractVector{T}
+    s::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_eq::Vector{Cint}
 ) where{T}
 
-    s .= zero(T)
-    z .= zero(T)
-
-    return nothing
+    CUDA.@allowscalar begin
+        for i in idx_eq
+            rng_cone_i = rng_cones[i]
+            @views @. z[rng_cone_i] = zero(T)
+            @views @. s[rng_cone_i] = zero(T)
+        end
+    end
+    CUDA.synchronize()
 end
 
-function set_identity_scaling!()
-    #do nothing.   "Identity" scaling will be zero for equalities
-    return nothing
-end
-
-function update_scaling!(
-    s::AbstractVector{T},
-    z::AbstractVector{T},
-    μ::T
-) where {T}
-
-    #nothing to do.
-    #This cone acts like λ = 0 everywhere.
-    return is_scaling_success = true
-end
-
-function get_Hs_zero!(
-    Hsblock::AbstractVector{T}
+@inline function get_Hs_zero!(
+    Hsblocks::AbstractVector{T},
+    rng_blocks::AbstractVector,
+    idx_eq::Vector{Cint}
 ) where {T}
 
     #expecting only a diagonal here, and
     #setting it to zero since this is an
     #equality condition
-    Hsblock .= zero(T)
-
-    return nothing
+    CUDA.@allowscalar begin
+        for i in idx_eq
+            @views @. Hsblocks[rng_blocks[i]] = zero(T)
+        end
+    end
+    CUDA.synchronize()
 end
 
 # compute the product y = WᵀWx
-function mul_Hs_zero!(
-    y::AbstractVector{T}
+@inline function mul_Hs_zero!(
+    y::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_eq::Vector{Cint}
 ) where {T}
 
-    @. y = zero(T)
-
+    CUDA.@allowscalar begin
+        for i in idx_eq
+            @views @. y[rng_cones[i]] = zero(T)
+        end
+    end
+    CUDA.synchronize()
 end
 
-function affine_ds_zero!(
-    ds::AbstractVector{T}
+@inline function affine_ds_zero!(
+    ds::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_eq::Vector{Cint}
 ) where {T}
 
-    ds .= zero(T)
+    CUDA.@allowscalar begin
+        for i in idx_eq
+            @views @. ds[rng_cones[i]] = zero(T)
+        end
+    end
+    CUDA.synchronize()
 end
 
-function combined_ds_shift_zero!(
-    shift::AbstractVector{T}
+@inline function combined_ds_shift_zero!(
+    shift::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_eq::Vector{Cint}
 ) where {T}
 
-    shift .= zero(T)
-    return nothing
+    CUDA.@allowscalar begin
+        for i in idx_eq
+            @views @. shift[rng_cones[i]] = zero(T)
+        end
+    end
+    CUDA.synchronize()
 end
 
-function Δs_from_Δz_offset_zero!(
-    out::AbstractVector{T}
+@inline function Δs_from_Δz_offset_zero!(
+    out::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_eq::Vector{Cint}
 ) where {T}
 
-    out .= zero(T)
-
-    return nothing
+    CUDA.@allowscalar begin
+        for i in idx_eq
+            @views @. out[rng_cones[i]] = zero(T)
+        end
+    end
+    CUDA.synchronize()
 end
 
 # function step_length(

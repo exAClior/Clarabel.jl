@@ -14,13 +14,13 @@ function _kernel_margins_soc(
     z::AbstractVector{T},
     α::AbstractVector{T},
     rng_cones::AbstractVector,
-    n_linear::Cint,
+    n_shift::Cint,
     n_soc::Cint
 ) where{T}
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
     if i <= n_soc
-        shift_i = i + n_linear
+        shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
         size_i = length(rng_cone_i)
         @views zi = z[rng_cone_i] 
@@ -35,25 +35,62 @@ function _kernel_margins_soc(
     return nothing
 end
 
+@inline function margins_soc(
+    z::AbstractVector{T},
+    α::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_soc::Cint,
+    αmin::T
+) where{T}
+    kernel = @cuda launch=false _kernel_margins_soc(z, α, rng_cones, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(z, α, rng_cones, n_shift, n_soc; threads, blocks)
+
+    @views αsoc = α[1:n_soc]
+    αmin = min(αmin,minimum(αsoc))
+    CUDA.@sync @. αsoc = max(zero(T),αsoc)
+    return (αmin, sum(αsoc))
+end
+
 # place vector into socone
 function _kernel_scaled_unit_shift_soc!(
     z::AbstractVector{T},
     α::T,
     rng_cones::AbstractVector,
-    n_linear::Cint,
+    n_shift::Cint,
     n_soc::Cint
 ) where{T}
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
     if i <= n_soc
-        shift_i = i + n_linear
+        shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
         @views zi = z[rng_cone_i] 
         zi[1] += α
     end
 
     return nothing
+end
+
+@inline function scaled_unit_shift_soc!(
+    z::AbstractVector{T},
+    rng_cones::AbstractVector,
+    α::T,
+    n_shift::Cint,
+    n_soc::Cint   
+) where{T}
+
+    kernel = @cuda launch=false _kernel_scaled_unit_shift_soc!(z, α, rng_cones, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(z, α, rng_cones, n_shift, n_soc; threads, blocks)
 end
 
 # unit initialization for asymmetric solves
@@ -84,6 +121,22 @@ function _kernel_unit_initialization_soc!(
     end
  
     return nothing
+end 
+
+@inline function unit_initialization_soc!(
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_soc::Cint
+) where{T}
+
+    kernel = @cuda launch=false _kernel_unit_initialization_soc!(z, s, rng_cones, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(z, s, rng_cones, n_shift, n_soc; threads, blocks)
 end 
 
 # # configure cone internals to provide W = I scaling
@@ -120,6 +173,21 @@ function _kernel_set_identity_scaling_soc!(
     return nothing
 end
 
+@inline function set_identity_scaling_soc!(
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_soc::Cint
+) where {T}
+    kernel = @cuda launch=false _kernel_set_identity_scaling_soc!(w, η, rng_cones, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(w, η, rng_cones, n_shift, n_soc; threads, blocks)
+end
+
 function _kernel_update_scaling_soc!(
     s::AbstractVector{T},
     z::AbstractVector{T},
@@ -127,14 +195,14 @@ function _kernel_update_scaling_soc!(
     λ::AbstractVector{T},
     η::AbstractVector{T},
     rng_cones::AbstractVector,
-    n_linear::Cint,
+    n_shift::Cint,
     n_soc::Cint
 ) where {T}
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
     if i <= n_soc
-        shift_i = i + n_linear
+        shift_i = i + n_shift
         rng_i = rng_cones[shift_i]
         @views zi = z[rng_i] 
         @views si = s[rng_i] 
@@ -216,6 +284,25 @@ function _kernel_update_scaling_soc!(
     # return is_scaling_success = true
 end
 
+@inline function update_scaling_soc!(
+    s::AbstractVector{T},
+    z::AbstractVector{T},
+    w::AbstractVector{T},
+    λ::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_soc::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_update_scaling_soc!(s, z, w, λ, η, rng_cones, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(s, z, w, λ, η, rng_cones, n_shift, n_soc; threads, blocks)
+end
+
 function _kernel_get_Hs_soc!(
     Hsblocks::AbstractVector{T},
     w::AbstractVector{T},
@@ -225,17 +312,6 @@ function _kernel_get_Hs_soc!(
     n_linear::Cint,
     n_soc::Cint
 ) where {T}
-
-    #YC: don't support sparse SOC currently
-    # if is_sparse_expandable(K)
-    #     #For sparse form, we are returning here the diagonal D block 
-    #     #from the sparse representation of W^TW, but not the
-    #     #extra two entries at the bottom right of the block.
-    #     #The AbstractVector for s and z (and its views) don't
-    #     #know anything about the 2 extra sparsifying entries
-    #     Hsblock    .= K.η^2
-    #     Hsblock[1] *= K.sparse_data.d
-    # end
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
@@ -263,6 +339,36 @@ function _kernel_get_Hs_soc!(
     end
 
     return nothing
+end
+
+@inline function get_Hs_soc!(
+    Hsblocks::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    rng_blocks::AbstractVector,
+    n_shift::Cint,
+    n_soc::Cint
+) where {T}
+
+    #YC: don't support sparse SOC currently
+    # if is_sparse_expandable(K)
+    #     #For sparse form, we are returning here the diagonal D block 
+    #     #from the sparse representation of W^TW, but not the
+    #     #extra two entries at the bottom right of the block.
+    #     #The AbstractVector for s and z (and its views) don't
+    #     #know anything about the 2 extra sparsifying entries
+    #     Hsblock    .= K.η^2
+    #     Hsblock[1] *= K.sparse_data.d
+    # end
+
+    kernel = @cuda launch=false _kernel_get_Hs_soc!(Hsblocks, w, η, rng_cones, rng_blocks, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(Hsblocks, w, η, rng_cones, rng_blocks, n_shift, n_soc; threads, blocks)
+
 end
 
 # function Hs_is_diagonal(
@@ -307,6 +413,24 @@ function _kernel_mul_Hs_soc!(
     return nothing
 end
 
+@inline function mul_Hs_soc!(
+    y::AbstractVector{T},
+    x::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_soc::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_mul_Hs_soc!(y, x, w, η, rng_cones, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(y, x, w, η, rng_cones, n_shift, n_soc; threads, blocks)
+end
+
 # returns x = λ ∘ λ for the socone
 function _kernel_affine_ds_soc!(
     ds::AbstractVector{T},
@@ -339,6 +463,22 @@ function _kernel_affine_ds_soc!(
 
     return nothing
 
+end
+
+@inline function affine_ds_soc!(
+    ds::AbstractVector{T},
+    λ::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_soc::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_affine_ds_soc!(ds, λ, rng_cones, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(ds, λ, rng_cones, n_shift, n_soc; threads, blocks)
 end
 
 function _kernel_combined_ds_shift_soc!(
@@ -419,6 +559,26 @@ function _kernel_combined_ds_shift_soc!(
     return nothing
 end
 
+@inline function combined_ds_shift_soc!(
+    shift::AbstractVector{T},
+    step_z::AbstractVector{T},
+    step_s::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_soc::Cint,
+    σμ::T
+) where {T}
+
+    kernel = @cuda launch=false _kernel_combined_ds_shift_soc!(shift, step_z, step_s, w, η, rng_cones, n_shift, n_soc, σμ)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(shift, step_z, step_s, w, η, rng_cones, n_shift, n_soc, σμ; threads, blocks)
+end
+
 function _kernel_Δs_from_Δz_offset_soc!(
     out::AbstractVector{T},
     ds::AbstractVector{T},
@@ -427,14 +587,14 @@ function _kernel_Δs_from_Δz_offset_soc!(
     λ::AbstractVector{T},
     η::AbstractVector{T},
     rng_cones::AbstractVector,
-    n_linear::Cint,
+    n_shift::Cint,
     n_soc::Cint
 ) where {T}
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
     if i <= n_soc
-        shift_i = i + n_linear
+        shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
         size_i = length(rng_cone_i)
         @views outi = out[rng_cone_i] 
@@ -468,6 +628,26 @@ function _kernel_Δs_from_Δz_offset_soc!(
 
 end
 
+@inline function Δs_from_Δz_offset_soc!(
+    out::AbstractVector{T},
+    ds::AbstractVector{T},
+    z::AbstractVector{T},
+    w::AbstractVector{T},
+    λ::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_soc::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_Δs_from_Δz_offset_soc!(out, ds, z, w, λ, η, rng_cones, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(out, ds, z, w, λ, η, rng_cones, n_shift, n_soc; threads, blocks)
+end
+
 #return maximum allowable step length while remaining in the socone
 function _kernel_step_length_soc(
     dz::AbstractVector{T},
@@ -496,6 +676,29 @@ function _kernel_step_length_soc(
     end
 
     return nothing
+end
+
+@inline function step_length_soc(
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+     z::AbstractVector{T},
+     s::AbstractVector{T},
+     α::AbstractVector{T},
+     αmax::T,
+     rng_cones::AbstractVector,
+     n_shift::Cint,
+     n_soc::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_step_length_soc(dz, ds, z, s, α, rng_cones, n_shift, n_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(dz, ds, z, s, α, rng_cones, n_shift, n_soc; threads, blocks)
+    @views αmax = min(αmax,minimum(α[1:n_soc]))
+
+    return αmax
 end
 
 function _kernel_compute_barrier_soc(

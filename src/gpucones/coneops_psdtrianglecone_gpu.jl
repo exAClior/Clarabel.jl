@@ -8,6 +8,23 @@ using GenericLinearAlgebra  # extends SVD, eigs etc for BigFloats
 # numel(K::PSDTriangleCone{T})  where {T} = K.numel    #number of elements
 
 # function margins is implemented explicitly into the compositecone operation
+@inline function margins_psd(
+    Z::AbstractArray{T,3},
+    z::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_psd::Cint,
+    αmin::T
+) where {T}
+    svec_to_mat_gpu!(Z, z, rng_cones, n_shift, n_psd)
+
+    # Batched SVD decomposition
+    # YC: memory of e can be optimized later
+    e = CUDA.CUSOLVER.syevjBatched!('N','U', Z)      #'N' returns eigenvalues only; 'V' returns both eigenvalues and eigenvectors
+    αmin = min(αmin, minimum(e))
+    CUDA.@sync @. e = max(e, zero(T))
+    return (αmin, sum(e))
+end
 
 # place vector into sdp cone
 function _kernel_scaled_unit_shift_psd!(
@@ -43,12 +60,12 @@ end
     n_shift::Cint,
     n_psd::Cint
 ) where {T}
-    kernel = @cuda launch=false _kernel_scaled_unit_shift_psd!(z,α,rng_cones,psd_dim,n_shift,n_psd)
+    kernel = @cuda launch=false _kernel_scaled_unit_shift_psd!(z, α, rng_cones, psd_dim, n_shift, n_psd)
     config = launch_configuration(kernel.fun)
     threads = min(n_psd, config.threads)
     blocks = cld(n_psd, threads)
 
-    CUDA.@sync kernel(z,α,rng_cones,psd_dim,n_shift,n_psd; threads, blocks)
+    CUDA.@sync kernel(z, α, rng_cones, psd_dim, n_shift, n_psd; threads, blocks)
 end
 
 # unit initialization for asymmetric solves
@@ -74,8 +91,7 @@ end
     return nothing
  end
 
-
-
+# # configure cone internals to provide W = I scaling
 function _kernel_set_identity_scaling_psd!(
     R::AbstractArray{T,3},
     Rinv::AbstractArray{T,3},
@@ -98,6 +114,80 @@ function _kernel_set_identity_scaling_psd!(
     end
 
     return nothing
+end
+
+@inline function set_identity_scaling_psd!(
+    R::AbstractArray{T,3},
+    Rinv::AbstractArray{T,3},
+    Hspsd::AbstractArray{T,3},
+    psd_dim::Cint,
+    n_psd::Cint
+) where {T}
+    kernel = @cuda launch=false _kernel_set_identity_scaling_psd!(R, Rinv, Hspsd, psd_dim, n_psd)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_psd, config.threads)
+    blocks = cld(n_psd, threads)
+
+    CUDA.@sync kernel(R, Rinv, Hspsd, psd_dim, n_psd; threads, blocks)
+end
+
+@inline function update_scaling_psd!(
+    L1::AbstractArray{T,3},
+    L2::AbstractArray{T,3},
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    workmat1::AbstractArray{T,3},
+    λpsd::AbstractMatrix{T},
+    Λisqrt::AbstractMatrix{T},
+    R::AbstractArray{T,3},
+    Rinv::AbstractArray{T,3},
+    Hspsd::AbstractArray{T,3},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_psd::Cint
+) where {T}
+
+    svec_to_mat_gpu!(L2,z,rng_cones,n_shift,n_psd)
+    svec_to_mat_gpu!(L1,s,rng_cones,n_shift,n_psd)
+
+    _, infoz = potrfBatched!(L2, 'L')
+    _, infos = potrfBatched!(L1, 'L')
+
+    # YC: This is an issue related to the batched Cholesky factorization in CUSOLVER,
+    # which fills in both lower and upper triangular of each submatrix during factorization
+    #Set upper triangular parts to 0
+    mask_zeros!(L2, 'U')
+    mask_zeros!(L1, 'U')
+
+    # bail if the cholesky factorization fails
+    if !(all(==(0), infoz) && all(==(0), infos))
+        return is_scaling_success = false
+    end
+
+    #SVD of L2'*L1,
+    tmp = workmat1;
+    CUDA.CUBLAS.gemm_strided_batched!('T', 'N', one(T), L2, L1, zero(T), tmp)
+    U, S, V = CUDA.CUSOLVER.gesvdj!('V', tmp)
+
+    #assemble λ (diagonal), R and Rinv.
+    copyto!(λpsd, S)
+    CUDA.@sync @. Λisqrt = inv.(sqrt.(λpsd))
+
+    #R = L1*(V)*Λisqrt  Λisqrt is a diagonal matrix for each psd cone
+    CUDA.CUBLAS.gemm_strided_batched!('N', 'N', one(T), L1, V, zero(T), R)
+    right_mul_batched!(R,Λisqrt,R)
+
+    #Rinv = Λisqrt*(U)'*L2'
+    CUDA.CUBLAS.gemm_strided_batched!('T', 'T', one(T), U, L2, zero(T), Rinv)
+    left_mul_batched!(Λisqrt,Rinv,Rinv)
+
+    #compute R*R' (upper triangular part only)
+    RRt = workmat1;
+    fill!(RRt, zero(T))
+    CUDA.CUBLAS.gemm_strided_batched!('N', 'T', one(T), R, R, zero(T), RRt)
+
+    #YC: RRt may not be symmetric, not sure how much effect it will be
+    skron_batched!(Hspsd,RRt)
 end
 
 function _kernel_get_Hs_psd!(
@@ -125,9 +215,47 @@ function _kernel_get_Hs_psd!(
 
 end
 
-# # compute the product y = WᵀWx
-# function mul_Hs!()
-# end
+@inline function get_Hs_psd!(
+    Hsblocks::AbstractVector{T},
+    Hspsd::AbstractArray{T,3},
+    rng_blocks::AbstractVector,
+    n_shift::Cint,
+    n_psd::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_get_Hs_psd!(Hsblocks, Hspsd, rng_blocks, n_shift, n_psd)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_psd, config.threads)
+    blocks = cld(n_psd, threads)
+
+    CUDA.@sync kernel(Hsblocks, Hspsd, rng_blocks, n_shift, n_psd; threads, blocks)
+
+end
+
+# compute the product y = WᵀWx
+@inline function mul_Hs_psd!(
+    y::AbstractVector{T},
+    x::AbstractVector{T},
+    Hspsd::AbstractArray{T,3},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_psd::Cint,
+    psd_dim::Cint
+) where {T}
+    CUDA.@allowscalar rng = rng_cones[n_shift+1].start:rng_cones[n_shift+n_psd].stop
+
+    #Transform it into the matrix form 
+    @views tmpx = x[rng]
+    @views tmpy = y[rng]
+
+    n_tri_dim = triangular_number(psd_dim)
+    n_psd_int64 = Int64(n_psd)
+
+    X = reshape(tmpx, (n_tri_dim, n_psd_int64))
+    Y = reshape(tmpy, (n_tri_dim, n_psd_int64))
+
+    CUDA.CUBLAS.gemv_strided_batched!('N', one(T), Hspsd, X, zero(T), Y)
+end
 
 # returns ds = λ ∘ λ for the SDP cone
 function _kernel_affine_ds_psd!(
@@ -292,6 +420,38 @@ end
 
 end
 
+@inline function step_length_psd(
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+    Λisqrt::AbstractMatrix{T}, 
+    d::AbstractVector{T}, 
+    Rx::AbstractArray{T,3}, 
+    Rinv::AbstractArray{T,3}, 
+    workmat1::AbstractArray{T,3}, 
+    workmat2::AbstractArray{T,3}, 
+    workmat3::AbstractArray{T,3},
+    αmax::T,
+    rng_cones::AbstractVector,
+    n_shift::Cint, 
+    n_psd::Cint
+) where {T}
+
+    workΔ  = workmat1
+    #d = Δz̃ = WΔz
+    # We need an extra parameter since the dimension of d is not equal to that of dz
+    # αz = step_length_psd_component(workΔ,d,Λisqrt,αmax)
+    mul_Wx_psd!(d, dz, Rx, rng_cones, workmat1, workmat2, workmat3, n_shift, n_psd, true)
+    αz = step_length_psd_component_gpu(workΔ, d, Λisqrt, n_psd, αmax)
+    
+    #d = Δs̃ = W^{-T}Δs
+    mul_WTx_psd!(d, ds, Rinv, rng_cones, workmat1, workmat2, workmat3, n_shift, n_psd, true)
+    αs = step_length_psd_component_gpu(workΔ, d, Λisqrt, n_psd, αmax)
+    
+    @views αmax = min(αmax,αz,αs)
+
+    return αmax
+end
+
 function _kernel_logdet!(
     barrier::AbstractVector{T},
     fact::AbstractArray{T,3},
@@ -432,98 +592,6 @@ end
 
     return nothing
 end
-
-# # implements y = αW^{-1}x + βy for the psd cone
-# function mul_Winv!(
-#     K::PSDTriangleCone{T},
-#     is_transpose::Symbol,
-#     y::AbstractVector{T},
-#     x::AbstractVector{T},
-#     α::T,
-#     β::T
-# ) where {T}
-
-#     mul_Wx_inner(
-#         is_transpose,
-#         y,x,
-#         α,
-#         β,
-#         K.data.Rinv,
-#         K.data.workmat1,
-#         K.data.workmat2,
-#         K.data.workmat3)
-    
-# end
-
-# # implements x = λ \ z for the SDP cone
-# function λ_inv_circ_op!(
-#     K::PSDTriangleCone{T},
-#     x::AbstractVector{T},
-#     z::AbstractVector{T}
-# ) where {T}
-
-#     (X,Z) = (K.data.workmat1,K.data.workmat2)
-#     map((M,v)->svec_to_mat!(M,v),(X,Z),(x,z))
-
-#     λ = K.data.λ
-#     for i = 1:K.n
-#         for j = 1:K.n
-#             X[i,j] = 2*Z[i,j]/(λ[i] + λ[j])
-#         end
-#     end
-#     mat_to_svec!(x,X)
-
-#     return nothing
-# end
-
-# # ---------------------------------------------
-# # Jordan algebra operations for symmetric cones 
-# # ---------------------------------------------
-
-# # implements x = y ∘ z for the SDP cone
-# function circ_op!(
-#     K::PSDTriangleCone{T},
-#     x::AbstractVector{T},
-#     y::AbstractVector{T},
-#     z::AbstractVector{T}
-# ) where {T}
-
-#     (Y,Z) = (K.data.workmat1,K.data.workmat2)
-#     map((M,v)->svec_to_mat!(M,v),(Y,Z),(y,z))
-
-#     X = K.data.workmat3;
-
-#     #X  .= (Y*Z + Z*Y)/2 
-#     # NB: Y and Z are both symmetric
-#     if T <: LinearAlgebra.BlasFloat
-#         LinearAlgebra.BLAS.syr2k!('U', 'N', T(0.5), Y, Z, zero(T), X)
-#     else 
-#         X .= (Y*Z + Z*Y)/2
-#     end
-#     mat_to_svec!(x,Symmetric(X))
-
-#     return nothing
-# end
-
-# # implements x = y \ z for the SDP cone
-# function inv_circ_op!(
-#     K::PSDTriangleCone{T},
-#     x::AbstractVector{T},
-#     y::AbstractVector{T},
-#     z::AbstractVector{T}
-# ) where {T}
-
-#     # X should be the solution to (YX + XY)/2 = Z
-
-#     #  For general arguments this requires solution to a symmetric
-#     # Sylvester equation.  Throwing an error here since I do not think
-#     # the inverse of the ∘ operator is ever required for general arguments,
-#     # and solving this equation is best avoided.
-
-#     error("This function not implemented and should never be reached.")
-
-#     return nothing
-# end
 
 #-----------------------------------------
 # internal operations for SDP cones 

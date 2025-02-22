@@ -16,96 +16,151 @@
 #     return false
 # end
 
-function margins_nonnegative(
+@inline function margins_nonnegative(
     z::AbstractVector{T},
-    α::AbstractVector{T}
+    α::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_inq::Vector{Cint},
+    αmin::T
 ) where{T}
+    margin = zero(T)
+    
+    CUDA.@allowscalar @inbounds for i in idx_inq
+        rng_cone_i = rng_cones[i]
+        @views zi = z[rng_cone_i]
+        αmin = min(αmin,minimum(zi))
+        @views αi = α[rng_cone_i]
+        @. αi = max(zi,zero(T))
+        CUDA.synchronize()
+        margin += sum(αi)
+    end
 
-    @. α = max(z,0)
-    CUDA.synchronize()
-
-    return nothing
+    return (αmin, margin)
 end
 
 # place vector into nn cone
-function scaled_unit_shift_nonnegative!(
+@inline function scaled_unit_shift_nonnegative!(
     z::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_inq::Vector{Cint},
     α::T
 ) where{T}
 
-    @. z += α 
-
-    return nothing
+    CUDA.@allowscalar begin
+        for i in idx_inq
+            rng_cone_i = rng_cones[i]
+            @views @. z[rng_cone_i] += α 
+        end
+    end
+    CUDA.synchronize()
 end
 
 # unit initialization for asymmetric solves
-function unit_initialization_nonnegative!(
+@inline function unit_initialization_nonnegative!(
    z::AbstractVector{T},
-   s::AbstractVector{T}
+   s::AbstractVector{T},
+   rng_cones::AbstractVector,
+   idx_inq::Vector{Cint}
 ) where{T}
 
-    s .= one(T)
-    z .= one(T)
-
-   return nothing
+    CUDA.@allowscalar begin
+        for i in idx_inq
+            rng_cone_i = rng_cones[i]
+            @views @. z[rng_cone_i] = one(T)
+            @views @. s[rng_cone_i] = one(T)
+        end
+    end
+    CUDA.synchronize()
 end
 
 #configure cone internals to provide W = I scaling
-function set_identity_scaling_nonnegative!(
-    w::AbstractVector{T}
+@inline function set_identity_scaling_nonnegative!(
+    w::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_inq::Vector{Cint}
 ) where {T}
 
-    @. w = one(T)
-
-    return nothing
+    CUDA.@allowscalar begin
+        for i in idx_inq
+            @views @. w[rng_cones[i]] = one(T)
+        end
+    end
+    CUDA.synchronize()
 end
 
-function update_scaling_nonnegative!(
+@inline function update_scaling_nonnegative!(
     s::AbstractVector{T},
     z::AbstractVector{T},
     w::AbstractVector{T},
-    λ::AbstractVector{T}
+    λ::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_inq::Vector{Cint}    
 ) where {T}
 
-    @. λ = sqrt(s*z)
-    @. w = sqrt(s/z)
-
-    return is_scaling_success = true
+    CUDA.@allowscalar for i in idx_inq
+        rng_cone_i = rng_cones[i]
+        @views  si = s[rng_cone_i]
+        @views  zi = z[rng_cone_i]
+        @views  @. λ[rng_cone_i] = sqrt(si*zi)
+        @views  @. w[rng_cone_i] = sqrt(si/zi)
+    end
+    CUDA.synchronize()
 end
 
-function get_Hs_nonnegative!(
-    Hsblock::AbstractVector{T},
-    w::AbstractVector{T}
+@inline function get_Hs_nonnegative!(
+    Hsblocks::AbstractVector{T},
+    w::AbstractVector{T},
+    rng_cones::AbstractVector,
+    rng_blocks::AbstractVector,
+    idx_inq::Vector{Cint}  
 ) where {T}
 
     #this block is diagonal, and we expect here
     #to receive only the diagonal elements to fill
-    @. Hsblock = w^2
-
-    return nothing
+    CUDA.@allowscalar begin
+        for i in idx_inq
+            @views wi = w[rng_cones[i]]
+            @views @. Hsblocks[rng_blocks[i]] = wi^2
+        end
+    end
+    CUDA.synchronize()
 end
 
 # compute the product y = WᵀWx
-function mul_Hs_nonnegative!(
+@inline function mul_Hs_nonnegative!(
     y::AbstractVector{T},
     x::AbstractVector{T},
-    w::AbstractVector{T}
+    w::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_inq::Vector{Cint} 
 ) where {T}
 
     #NB : seemingly sensitive to order of multiplication
-    @. y = (w * (w * x))
-
+    CUDA.@allowscalar begin
+        for i in idx_inq
+            @views wi = w[rng_cones[i]]
+            @views xi = x[rng_cones[i]]
+            @views yi = y[rng_cones[i]]
+            @. yi = (wi * (wi * xi))
+        end
+    end
+    CUDA.synchronize()
 end
 
 # returns ds = λ∘λ for the nn cone
-function affine_ds_nonnegative!(
+@inline function affine_ds_nonnegative!(
     ds::AbstractVector{T},
-    λ::AbstractVector{T}
+    λ::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_inq::Vector{Cint} 
 ) where {T}
 
-    @. ds = λ^2
-
-    return nothing
+    CUDA.@allowscalar begin
+        for i in idx_inq
+            @views @. ds[rng_cones[i]] = λ[rng_cones[i]]^2
+        end
+    end
+    CUDA.synchronize()
 end
 
 @inline function combined_ds_shift_nonnegative!(
@@ -113,7 +168,9 @@ end
     step_z::AbstractVector{T},
     step_s::AbstractVector{T},
     w::AbstractVector{T},
-    σμ::T
+    σμ::T,
+    rng_cones::AbstractVector,
+    idx_inq::Vector{Cint} 
 ) where {T}
 
     # The shift must be assembled carefully if we want to be economical with
@@ -123,29 +180,44 @@ end
     # We can't have aliasing vector arguments to gemv_W or gemv_Winv, so 
     # we need a temporary variable to assign #Δz <= WΔz and Δs <= W⁻¹Δs
 
-    #shift vector used as workspace for a few steps 
-    tmp = shift              
+    CUDA.@allowscalar begin
+        for i in idx_inq
+            @views shift_i = shift[rng_cones[i]]
+            step_zi = step_z[rng_cones[i]]
+            step_si = step_s[rng_cones[i]]
+            wi = w[rng_cones[i]]
 
-     #Δz <- WΔz
-    @. tmp = step_z           
-    @. step_z = tmp*w
+            #shift vector used as workspace for a few steps 
+            tmp = shift_i              
 
-    #Δs <- W⁻¹Δs
-    @. tmp = step_s           
-    @. step_s = tmp/w
+                #Δz <- WΔz
+            @. tmp = step_zi           
+            @. step_zi = tmp*wi
 
-    #shift = W⁻¹Δs ∘ WΔz - σμe
-    @. shift = step_s*step_z - σμ                       
+            #Δs <- W⁻¹Δs
+            @. tmp = step_si           
+            @. step_si = tmp/wi
 
-    return nothing
+            #shift = W⁻¹Δs ∘ WΔz - σμe
+            @. shift_i = step_si*step_zi - σμ    
+        end
+    end    
+    CUDA.synchronize()               
 end
 
-function Δs_from_Δz_offset_nonnegative!(
+@inline function Δs_from_Δz_offset_nonnegative!(
     out::AbstractVector{T},
     ds::AbstractVector{T},
-    z::AbstractVector{T}
+    z::AbstractVector{T},
+    rng_cones::AbstractVector,
+    idx_inq::Vector{Cint} 
 ) where {T}
-    @. out = ds / z
+    CUDA.@allowscalar begin
+        for i in idx_inq
+            @views @. out[rng_cones[i]] = ds[rng_cones[i]] / z[rng_cones[i]]
+        end
+    end
+    CUDA.synchronize()
 end
 
 #return maximum allowable step length while remaining in the nn cone
@@ -176,18 +248,32 @@ end
      z::AbstractVector{T},
      s::AbstractVector{T},
      α::AbstractVector{T},
-     len_nn::Cint,
-     αmax::T
+     αmax::T,
+     rng_cones::AbstractVector,
+     idx_inq::Vector{Cint} 
 ) where {T}
 
-    kernel = @cuda launch=false _kernel_step_length_nonnegative(dz,ds,z,s,α,len_nn,αmax)
-    config = launch_configuration(kernel.fun)
-    threads = min(len_nn, config.threads)
-    blocks = cld(len_nn, threads)
+    CUDA.@allowscalar begin
+        for i in idx_inq
+            len_nn = Cint(length(rng_cones[i]))
+            rng_cone_i = rng_cones[i]
+            @views dzi = dz[rng_cone_i]
+            @views dsi = ds[rng_cone_i]
+            @views zi = z[rng_cone_i]
+            @views si = s[rng_cone_i]
+            @views αi = α[rng_cone_i]
+            
+            kernel = @cuda launch=false _kernel_step_length_nonnegative(dzi, dsi, zi, si, αi, len_nn, αmax)
+            config = launch_configuration(kernel.fun)
+            threads = min(len_nn, config.threads)
+            blocks = cld(len_nn, threads)
+        
+            CUDA.@sync kernel(dzi, dsi, zi, si, αi, len_nn, αmax; threads, blocks)
+            αmax = min(αmax,minimum(αi))
+        end
+    end
 
-    CUDA.@sync kernel(dz,ds,z,s,α,len_nn,αmax; threads, blocks)
-
-    return minimum(α)
+    return αmax
 end
 
 function _kernel_compute_barrier_nonnegative(

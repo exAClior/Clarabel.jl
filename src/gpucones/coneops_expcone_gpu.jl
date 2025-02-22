@@ -8,31 +8,7 @@
 
 # is_symmetric(::ExponentialCone{T}) where {T} = false
 
-# function margins(
-#     K::ExponentialCone{T},
-#     z::AbstractVector{T},
-#     pd::PrimalOrDualCone,
-# ) where{T}
-
-#     # We should never end up computing margins for this cone, since 
-#     # asymmetric problems should always use unit_initialization!
-#     error("This function should never be reached.");
-#     # 
-# end
-
-# function scaled_unit_shift!(
-#     K::ExponentialCone{T},
-#     z::AbstractVector{T},
-#     α::T,
-#     pd::PrimalOrDualCone
-# ) where{T}
-
-#     # We should never end up shifting to this cone, since 
-#     # asymmetric problems should always use unit_initialization!
-#     error("This function should never be reached.");
-#     # 
-# end
-
+# unit initialization for asymmetric solves
 function _kernel_unit_initialization_exp!(
    z::AbstractVector{T},
    s::AbstractVector{T},
@@ -61,14 +37,42 @@ function _kernel_unit_initialization_exp!(
     return nothing
 end
 
-# function set_identity_scaling!(
-#     K::ExponentialCone{T},
-# ) where {T}
+@inline function unit_initialization_exp!(
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_exp::Cint
+ ) where{T}
+ 
+    kernel = @cuda launch=false _kernel_unit_initialization_exp!(z, s, rng_cones, n_shift, n_exp)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_exp, config.threads)
+    blocks = cld(n_exp, threads)
 
-#     # We should never use identity scaling because 
-#     # we never want to allow symmetric initialization
-#     error("This function should never be reached.");
-# end
+    CUDA.@sync kernel(z, s, rng_cones, n_shift, n_exp; threads, blocks)
+ end
+
+ # update the scaling matrix Hs
+@inline function update_Hs_exp(
+    s::AbstractVector{T},
+    z::AbstractVector{T},
+    grad::AbstractVector{T},
+    Hs::AbstractArray{T},
+    H_dual::AbstractArray{T},
+    μ::T,
+    scaling_strategy::ScalingStrategy
+) where {T}
+
+    # Choose the scaling strategy
+    if(scaling_strategy == Dual::ScalingStrategy)
+        # Dual scaling: Hs = μ*H
+        use_dual_scaling_gpu(Hs,H_dual,μ)
+    else
+        # Primal-dual scaling
+        use_primal_dual_scaling_exp(s,z,grad,Hs,H_dual)
+    end 
+end
 
 function _kernel_update_scaling_exp!(
     s::AbstractVector{T},
@@ -105,11 +109,26 @@ function _kernel_update_scaling_exp!(
     return nothing
 end
 
-# function Hs_is_diagonal(
-#     K::ExponentialCone{T}
-# ) where{T}
-#     return false
-# end
+@inline function update_scaling_exp!(
+    s::AbstractVector{T},
+    z::AbstractVector{T},
+    grad::AbstractArray{T},
+    Hs::AbstractArray{T},
+    H_dual::AbstractArray{T},
+    rng_cones::AbstractVector,
+    μ::T,
+    scaling_strategy::ScalingStrategy,
+    n_shift::Cint,
+    n_exp::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_update_scaling_exp!(s, z, grad, Hs, H_dual, rng_cones, μ, scaling_strategy, n_shift, n_exp)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_exp, config.threads)
+    blocks = cld(n_exp, threads)
+
+    CUDA.@sync kernel(s, z, grad, Hs, H_dual, rng_cones, μ, scaling_strategy, n_shift, n_exp; threads, blocks)
+end
 
 # return μH*(z) for exponential cone
 function _kernel_get_Hs_exp!(
@@ -139,18 +158,21 @@ function _kernel_get_Hs_exp!(
 
 end
 
-# function affine_ds!(
-#     K::ExponentialCone{T},
-#     ds::AbstractVector{T},
-#     s::AbstractVector{T}
-# ) where {T}
+@inline function get_Hs_exp!(
+    Hsblocks::AbstractVector{T},
+    Hs::AbstractArray{T},
+    rng_blocks::AbstractVector,
+    n_shift::Cint,
+    n_exp::Cint
+) where {T}
 
-#     # @. x = y
-#     @inbounds for i = 1:3
-#         ds[i] = s[i]
-#     end
+    kernel = @cuda launch=false _kernel_get_Hs_exp!(Hsblocks, Hs, rng_blocks, n_shift, n_exp)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_exp, config.threads)
+    blocks = cld(n_exp, threads)
 
-# end
+    CUDA.@sync kernel(Hsblocks, Hs, rng_blocks, n_shift, n_exp; threads, blocks)
+end
 
 function _kernel_combined_ds_shift_exp!(
     shift::AbstractVector{T},
@@ -189,6 +211,27 @@ function _kernel_combined_ds_shift_exp!(
     end
 
     return nothing
+end
+
+@inline function combined_ds_shift_exp!(
+    shift::AbstractVector{T},
+    step_z::AbstractVector{T},
+    step_s::AbstractVector{T},
+    z::AbstractVector{T},
+    grad::AbstractArray{T},
+    H_dual::AbstractArray{T},
+    rng_cones::AbstractVector,
+    σμ::T,
+    n_shift::Cint,
+    n_exp::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_combined_ds_shift_exp!(shift, step_z, step_s, z, grad, H_dual, rng_cones, σμ, n_shift, n_exp)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_exp, config.threads)
+    blocks = cld(n_exp, threads)
+
+    CUDA.@sync kernel(shift, step_z, step_s, z, grad, H_dual, rng_cones, σμ, n_shift, n_exp; threads, blocks)
 end
 
 # function Δs_from_Δz_offset!(
@@ -236,6 +279,30 @@ function _kernel_step_length_exp(
     end
 
     return nothing
+end
+
+@inline function step_length_exp(
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+     z::AbstractVector{T},
+     s::AbstractVector{T},
+     α::AbstractVector{T},
+     rng_cones::AbstractVector,
+     αmax::T,
+     αmin::T,
+     step::T,
+     n_shift::Cint,
+     n_exp::Cint
+) where {T}
+    kernel = @cuda launch=false _kernel_step_length_exp(dz, ds, z, s, α, rng_cones, αmax, αmin, step, n_shift, n_exp)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_exp, config.threads)
+    blocks = cld(n_exp, threads)
+
+    CUDA.@sync kernel(dz, ds, z, s, α, rng_cones, αmax, αmin, step, n_shift, n_exp; threads, blocks)
+    @views αmax = min(αmax, minimum(α[1:n_exp]))
+
+    return αmax
 end
 
 @inline function backtrack_search_exp(

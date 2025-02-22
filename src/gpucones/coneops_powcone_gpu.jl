@@ -8,6 +8,7 @@
 
 # is_symmetric(::PowerCone{T}) where {T} = false
 
+# unit initialization for asymmetric solves
 function _kernel_unit_initialization_pow!(
     z::AbstractVector{T},
     s::AbstractVector{T},
@@ -15,7 +16,7 @@ function _kernel_unit_initialization_pow!(
     rng_cones::AbstractVector,
     n_shift::Cint,
     n_pow::Cint
- ) where{T}
+) where{T}
  
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
@@ -27,7 +28,7 @@ function _kernel_unit_initialization_pow!(
         si[1] = sqrt(one(T)+αp[i])
         si[2] = sqrt(one(T)+((one(T)-αp[i])))
         si[3] = zero(T)
-    
+
         #@. z = s
         @inbounds for j = 1:3
             zi[j] = si[j]
@@ -35,7 +36,46 @@ function _kernel_unit_initialization_pow!(
     end
 
     return nothing
- end
+end
+
+@inline function unit_initialization_pow!(
+    z::AbstractVector{T},
+    s::AbstractVector{T},
+    αp::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_pow::Cint
+) where{T}
+ 
+    kernel = @cuda launch=false _kernel_unit_initialization_pow!(z, s, αp, rng_cones, n_shift, n_pow)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_pow, config.threads)
+    blocks = cld(n_pow, threads)
+
+    CUDA.@sync kernel(z, s, αp, rng_cones, n_shift, n_pow; threads, blocks)
+end
+
+# update the scaling matrix Hs
+@inline function update_Hs_pow(
+    s::AbstractVector{T},
+    z::AbstractVector{T},
+    grad::AbstractVector{T},
+    Hs::AbstractArray{T},
+    H_dual::AbstractArray{T},
+    μ::T,
+    scaling_strategy::ScalingStrategy,
+    α::T
+) where {T}
+
+    # Choose the scaling strategy
+    if(scaling_strategy == Dual::ScalingStrategy)
+        # Dual scaling: Hs = μ*H
+        use_dual_scaling_gpu(Hs,H_dual,μ)
+    else
+        # Primal-dual scaling
+        use_primal_dual_scaling_pow(s,z,grad,Hs,H_dual,α)
+    end 
+end
 
 function _kernel_update_scaling_pow!(
     s::AbstractVector{T},
@@ -74,11 +114,28 @@ function _kernel_update_scaling_pow!(
     return nothing
 end
 
-# function Hs_is_diagonal(
-#     K::PowerCone{T}
-# ) where{T}
-#     return false
-# end
+@inline function update_scaling_pow!(
+    s::AbstractVector{T},
+    z::AbstractVector{T},
+    grad::AbstractArray{T},
+    Hs::AbstractArray{T},
+    H_dual::AbstractArray{T},
+    αp::AbstractVector{T},
+    rng_cones::AbstractVector,
+    μ::T,
+    scaling_strategy::ScalingStrategy,
+    n_shift::Cint,
+    n_exp::Cint,
+    n_pow::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_update_scaling_pow!(s, z, grad, Hs, H_dual, αp, rng_cones, μ, scaling_strategy, n_shift, n_exp, n_pow)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_pow, config.threads)
+    blocks = cld(n_pow, threads)
+
+    CUDA.@sync kernel(s, z, grad, Hs, H_dual, αp, rng_cones, μ, scaling_strategy, n_shift, n_exp, n_pow; threads, blocks)
+end
 
 # return μH*(z) for power cone
 function _kernel_get_Hs_pow!(
@@ -109,6 +166,23 @@ function _kernel_get_Hs_pow!(
 
 end
 
+@inline function get_Hs_pow!(
+    Hsblocks::AbstractVector{T},
+    Hs::AbstractArray{T},
+    rng_blocks::AbstractVector,
+    n_shift::Cint,
+    n_exp::Cint,
+    n_pow::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_get_Hs_pow!(Hsblocks, Hs, rng_blocks, n_shift, n_exp, n_pow)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_pow, config.threads)
+    blocks = cld(n_pow, threads)
+
+    CUDA.@sync kernel(Hsblocks, Hs, rng_blocks, n_shift, n_exp, n_pow; threads, blocks)
+end
+
 # # compute the product y = Hₛx = μH(z)x
 # function mul_Hs!(
 #     K::PowerCone{T},
@@ -123,18 +197,6 @@ end
 #         y[i] =  H[i,1]*x[1] + H[i,2]*x[2] + H[i,3]*x[3]
 #     end
 
-# end
-
-# function affine_ds!(
-#     K::PowerCone{T},
-#     ds::AbstractVector{T},
-#     s::AbstractVector{T}
-# ) where {T}
-
-#     # @. x = y
-#     @inbounds for i = 1:3
-#         ds[i] = s[i]
-#     end
 # end
 
 function _kernel_combined_ds_shift_pow!(
@@ -177,6 +239,29 @@ function _kernel_combined_ds_shift_pow!(
     end
 
     return nothing
+end
+
+@inline function combined_ds_shift_pow!(
+    shift::AbstractVector{T},
+    step_z::AbstractVector{T},
+    step_s::AbstractVector{T},
+    z::AbstractVector{T},
+    grad::AbstractArray{T},
+    H_dual::AbstractArray{T},
+    αp::AbstractVector{T},
+    rng_cones::AbstractVector,
+    σμ::T,
+    n_shift::Cint,
+    n_exp::Cint,
+    n_pow::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_combined_ds_shift_pow!(shift, step_z, step_s, z, grad, H_dual, αp, rng_cones, σμ, n_shift, n_exp, n_pow)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_pow, config.threads)
+    blocks = cld(n_pow, threads)
+
+    CUDA.@sync kernel(shift, step_z, step_s, z, grad, H_dual, αp, rng_cones, σμ, n_shift, n_exp, n_pow; threads, blocks)
 end
 
 # function Δs_from_Δz_offset!(
@@ -225,6 +310,32 @@ function _kernel_step_length_pow(
     end
     
     return nothing
+end
+
+@inline function step_length_pow(
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+     z::AbstractVector{T},
+     s::AbstractVector{T},
+     α::AbstractVector{T},
+     αp::AbstractVector{T},
+     rng_cones::AbstractVector,
+     αmax::T,
+     αmin::T,
+     step::T,
+     n_shift::Cint,
+     n_pow::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_step_length_pow(dz,ds,z,s,α,αp,rng_cones,αmax,αmin,step,n_shift,n_pow)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_pow, config.threads)
+    blocks = cld(n_pow, threads)
+
+    CUDA.@sync kernel(dz,ds,z,s,α,αp,rng_cones,αmax,αmin,step,n_shift,n_pow; threads, blocks)
+    @views αmax = min(αmax,minimum(α[1:n_pow]))
+
+    return αmax
 end
 
 @inline function backtrack_search_pow(
