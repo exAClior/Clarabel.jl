@@ -607,7 +607,7 @@ function step_length_psd_component_gpu(
     
     # NB: this could be made faster since we only need to populate the upper triangle 
     svec_to_mat_no_shift_gpu!(workΔ,d,n_psd)
-    lrscale_gpu!(workΔ,Λisqrt)
+    lrscale_psd!(workΔ,Λisqrt)
     # symmetric_part_gpu!(workΔ)
 
     # batched eigenvalue decomposition

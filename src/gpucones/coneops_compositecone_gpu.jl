@@ -17,24 +17,34 @@ function allows_primal_dual_scaling(cones::CompositeConeGPU{T}) where {T}
 end
 
 
-# function rectify_equilibration!(
-#     cones::CompositeCone{T},
-#      δ::AbstractVector{T},
-#      e::AbstractVector{T}
-# ) where{T}
+function rectify_equilibration!(
+    cones::CompositeConeGPU{T},
+     δ::AbstractVector{T},
+     e::AbstractVector{T}
+) where{T}
 
-#     any_changed = false
+    n_linear = cones.n_linear
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
 
-#     #we will update e <- δ .* e using return values
-#     #from this function.  default is to do nothing at all
-#     δ .= 1
+    rng_cones = cones.rng_cones
 
-#     for (cone,δi,ei) in zip(cones,δ.views,e.views)
-#         @conedispatch any_changed |= rectify_equilibration!(cone,δi,ei)
-#     end
+    n_rec = n_soc + n_exp + n_pow + n_psd
+    any_changed = (n_rec > 0) ? true : false
 
-#     return any_changed
-# end
+    #we will update e <- δ .* e using return values
+    #from this function.  default is to do nothing at all
+    CUDA.@sync @. δ = one(T)
+
+    if any_changed
+        n_shift = n_linear
+        rectify_equilibration_gpu!(δ, e, rng_cones, n_shift, n_rec)
+    end
+
+    return any_changed
+end
 
 function margins(
     cones::CompositeConeGPU{T},

@@ -1,7 +1,7 @@
 import LinearAlgebra: dot
 
 
-function clip(
+@inline function clip(
     s::Real,
     min_thresh::Real,
     max_thresh::Real)

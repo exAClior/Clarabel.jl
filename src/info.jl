@@ -86,8 +86,8 @@ function info_update_gpu!(
     normq = data_get_normq!(data)
 
     #shortcuts for the equilibration matrices
-    dinv_gpu = data.equilibration.dinv_gpu
-    einv_gpu = data.equilibration.einv_gpu
+    dinv = data.equilibration.dinv
+    einv = data.equilibration.einv
     cscale = data.equilibration.c[]
 
     #primal and dual costs. dot products are invariant w.r.t
@@ -100,15 +100,15 @@ function info_update_gpu!(
     #variables norms, undoing the equilibration.  Do not unscale
     #by τ yet because the infeasibility residuals are ratios of 
     #terms that have no affine parts anyway
-    normx = norm_scaled_gpu(dinv_gpu,variables.x,workx)
-    normz = norm_scaled_gpu(einv_gpu,variables.z,worksz)
-    norms = norm_scaled_gpu(einv_gpu,variables.s,worksz)
+    normx = norm_scaled_gpu(dinv,variables.x,workx)
+    normz = norm_scaled_gpu(einv,variables.z,worksz)
+    norms = norm_scaled_gpu(einv,variables.s,worksz)
 
     #primal and dual infeasibility residuals.   
-    info.res_primal_inf = norm_scaled_gpu(dinv_gpu,residuals.rx_inf,workx) / max(one(T), normz)
+    info.res_primal_inf = norm_scaled_gpu(dinv,residuals.rx_inf,workx) / max(one(T), normz)
     info.res_dual_inf   = max(
-        norm_scaled_gpu(dinv_gpu,residuals.Px,workx) / max(one(T), normx),
-        norm_scaled_gpu(einv_gpu,residuals.rz_inf,worksz) / max(one(T), normx + norms)
+        norm_scaled_gpu(dinv,residuals.Px,workx) / max(one(T), normx),
+        norm_scaled_gpu(einv,residuals.rz_inf,worksz) / max(one(T), normx + norms)
     )
 
     #now back out the τ scaling so we can normalize the unscaled primal / dual errors 
@@ -117,8 +117,8 @@ function info_update_gpu!(
     norms *= τinv
 
     #primal and dual relative residuals.  
-    info.res_primal  = norm_scaled_gpu(einv_gpu,residuals.rz,worksz) * τinv / max(one(T), normb + normx + norms)
-    info.res_dual    = norm_scaled_gpu(dinv_gpu,residuals.rx,workx) * τinv / max(one(T), normq + normx + normz)
+    info.res_primal  = norm_scaled_gpu(einv,residuals.rz,worksz) * τinv / max(one(T), normb + normx + norms)
+    info.res_dual    = norm_scaled_gpu(dinv,residuals.rx,workx) * τinv / max(one(T), normq + normx + normz)
 
     #absolute and relative gaps
     info.gap_abs = abs(info.cost_primal - info.cost_dual)

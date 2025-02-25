@@ -322,15 +322,9 @@ function variables_unscale!(
     end
 
 	#also undo the equilibration
-    if use_gpu
-		d = data.equilibration.d_gpu
-		e = data.equilibration.e_gpu 
-		einv = data.equilibration.einv_gpu
-	else
-		d = data.equilibration.d
-		e = data.equilibration.e 
-		einv = data.equilibration.einv
-	end
+    d = data.equilibration.d
+    e = data.equilibration.e 
+    einv = data.equilibration.einv
 
 	cscale = data.equilibration.c[]
 

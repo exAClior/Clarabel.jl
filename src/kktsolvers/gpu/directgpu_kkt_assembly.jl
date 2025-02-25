@@ -1,138 +1,194 @@
 using SparseArrays, StaticArrays
 
+function _allocate_kkt_Hsblocks_gpu(
+    ::Type{Z}, 
+    cones::CompositeConeGPU{T}
+) where{T <: AbstractFloat, Z <: Real}
+
+    rng_blocks = cones.rng_blocks
+    CUDA.@allowscalar nnz = length(rng_blocks) == 0 ? 0 : last(rng_blocks[end])
+    CUDA.zeros(Z,nnz)
+
+end
+
+struct GPUDataMap
+
+    P::AbstractVector{Cint}
+    A::AbstractVector{Cint}
+    At::AbstractVector{Cint}        #YC: not sure whether we need it or not
+    Hsblocks::AbstractVector{Cint}                #indices of the lower RHS blocks (by cone)
+
+    #all of above terms should be disjoint and their union
+    #should cover all of the user data in the KKT matrix.  Now
+    #we make two last redundant indices that will tell us where
+    #the whole diagonal is, including structural zeros.
+    diagP::AbstractVector{Cint}
+    diag_full::AbstractVector{Cint}
+
+    function GPUDataMap(
+        Pmat::AbstractSparseMatrix{T},
+        Amat::AbstractSparseMatrix{T},
+        cones::CompositeConeGPU{T}
+        ) where{T}
+
+        (m,n) = (size(Amat,1), size(Pmat,1))
+        P = CUDA.zeros(Cint,nnz(Pmat))
+        A = CUDA.zeros(Cint,nnz(Amat))
+        At = CUDA.zeros(Cint,nnz(Amat))
+
+        #the diagonal of the ULHS block P.
+        #NB : we fill in structural zeros here even if the matrix
+        #P is empty (e.g. as in an LP), so we can have entries in
+        #index Pdiag that are not present in the index P
+        diagP  = CUDA.zeros(Cint,n)
+
+        #make an index for each of the Hs blocks for each cone
+        Hsblocks = _allocate_kkt_Hsblocks_gpu(Cint, cones)
+
+        diag_full = CUDA.zeros(Cint,m+n)
+
+        return new(P, A, At, Hsblocks, diagP, diag_full)
+    end
+
+end
 
 function _assemble_full_kkt_matrix(
-    P::SparseMatrixCSC{T},
-    A::SparseMatrixCSC{T},
-    cones::CompositeCone{T},
-    shape::Symbol = :triu  #or tril
+    P::AbstractSparseMatrix{T},
+    A::AbstractSparseMatrix{T},
+    At::AbstractSparseMatrix{T},
+    cones::CompositeConeGPU{T}
 ) where{T}
-
-    map   = FullDataMap(P,A,cones)
+    map   = GPUDataMap(P,A,cones)
     (m,n) = (size(A,1), size(P,1))
-    p     = pdim(map.sparse_maps)
 
     #entries actually on the diagonal of P
-    nnz_diagP  = _count_diagonal_entries_full(P)
+    nnz_diagP  = _count_diagonal_entries_full_gpu(P)
 
     # total entries in the Hs blocks
     nnz_Hsblocks = length(map.Hsblocks)
 
-    nnzKKT = (nnz(P) +      # Number of elements in P
-    n -                     # Number of elements in diagonal top left block
-    nnz_diagP +             # remove double count on the diagonal if P has entries
+    nnzKKT = (nnz(P) +        # Number of elements in P
+    (n - nnz_diagP) +         # Number of elements in diagonal top left block, remove double count on the diagonal if P has entries
     2*nnz(A) +                # Number of nonzeros in A and A'
-    nnz_Hsblocks +          # Number of elements in diagonal below A'
-    2*nnz_vec(map.sparse_maps) + # Number of elements in sparse cone off diagonals, 2x compared to the triangle form
-    p                       # Number of elements in diagonal of sparse cones
+    nnz_Hsblocks              # Number of elements in diagonal below A'
     )
 
-    K = _csc_spalloc(T, m+n+p, m+n+p, nnzKKT)
+    rowptr, colval, nzval = _csr_spalloc_gpu(T, Cint(m+n), Cint(nnzKKT))
 
-    _full_kkt_assemble_colcounts(K,P,A,cones,map)       
-    _full_kkt_assemble_fill(K,P,A,cones,map)
+    P_zero = CUDA.zeros(Cint, length(rowptr))
+    fill!(P_zero, false)
+    _full_kkt_assemble_colcounts_gpu(rowptr, P, P_zero, A, At, cones)       
+    _full_kkt_assemble_fill_gpu(rowptr, colval, nzval, P, P_zero, A, At, cones, map)
+
+    K = CuSparseMatrixCSR{T}(rowptr, colval, nzval, (m+n, m+n))
+    P_zero = nothing    #release memory of P_zero
 
     return K,map
 
 end
 
-function _full_kkt_assemble_colcounts(
-    K::SparseMatrixCSC{T},
-    P::SparseMatrixCSC{T},
-    A::SparseMatrixCSC{T},
-    cones,
-    map
+function _full_kkt_assemble_colcounts_gpu(
+    rowptr::AbstractVector{Cint}, 
+    P::AbstractSparseMatrix{T},
+    P_zero::AbstractVector{Cint},
+    A::AbstractSparseMatrix{T},
+    At::AbstractSparseMatrix{T},
+    cones::CompositeConeGPU{T}
 ) where{T}
 
     (m,n) = size(A)
 
     #use K.p to hold nnz entries in each
     #column of the KKT matrix
-    K.colptr .= 0
+    fill!(rowptr, 0)
 
     #Count first n columns of KKT
-    _csc_colcount_block_full(K,P,A,1)
-    _csc_colcount_missing_diag_full(K,P,1)
-    _csc_colcount_block(K,A,n+1,:T)
+    _csr_rowcount_block_full_gpu(rowptr, P, At)
+    _csr_rowcount_missing_diag_full_gpu(rowptr, P, P_zero)
+    _csr_rowcount_block_gpu(rowptr, A, n+1)
 
-   # track the next sparse column to fill (assuming triu fill)
-   pcol = m + n + 1 #next sparse column to fill
-   sparse_map_iter = Iterators.Stateful(map.sparse_maps)
-    
-    for (i,cone) = enumerate(cones)
-        row = first(cones.rng_cones[i]) + n
+    n_linear = cones.n_linear
+    n_soc = cones.n_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
+    rng_cones = cones.rng_cones
 
-        #add the the Hs blocks in the lower right
-        blockdim = numel(cone)
-        if Hs_is_diagonal(cone)
-            _csc_colcount_diag(K,row,blockdim)
-        else
-            _csc_colcount_dense_full(K,row,blockdim)
+    CUDA.@allowscalar begin
+        for i in cones.idx_eq
+            rng_cone_i = rng_cones[i] .+ n 
+            @views rowptr[rng_cone_i] .+= 1
         end
+        for i in cones.idx_inq
+            rng_cone_i = rng_cones[i] .+ n 
+            @views rowptr[rng_cone_i] .+= 1
+        end
+    end
+    CUDA.synchronize()
 
-        #add sparse expansions columns for sparse cones 
-        if @conedispatch is_sparse_expandable(cone)  
-            thismap = popfirst!(sparse_map_iter)
-            _csc_colcount_sparsecone_full(cone,thismap,K,row,pcol)
-            pcol += pdim(thismap) #next sparse column to fill 
-        end 
+    n_rec = n_soc + n_exp + n_pow + n_psd
+    if (n_rec > 0)
+        _csr_rowcount_dense_full_gpu(rowptr, rng_cones, Cint(n), n_linear, n_rec)
     end
 
     return nothing
 end
 
 
-function _full_kkt_assemble_fill(
-    K::SparseMatrixCSC{T},
-    P::SparseMatrixCSC{T},
-    A::SparseMatrixCSC{T},
-    cones,
-    map
+function _full_kkt_assemble_fill_gpu(
+    rowptr::AbstractVector{Cint}, 
+    colval::AbstractVector{Cint},
+    nzval::AbstractVector{T},
+    P::AbstractSparseMatrix{T},
+    P_zero::AbstractVector{Cint},
+    A::AbstractSparseMatrix{T},
+    At::AbstractSparseMatrix{T},
+    cones::CompositeConeGPU{T},
+    map::GPUDataMap
 ) where{T}
 
     (m,n) = size(A)
+    n = Cint(n)
 
     #cumsum total entries to convert to K.p
-    _csc_colcount_to_colptr(K)
+    _csr_rowcount_to_rowptr_gpu(rowptr)
 
     #filling [P At;A 0] parts
-    _csc_fill_P_block_with_missing_diag_full(K,P,map.P)
-    _csc_fill_block(K,A,map.A,n+1,1,:N)
-    _csc_fill_block(K,A,map.At,1,n+1,:T)
+    _csr_fill_P_diag_full_gpu(rowptr, colval, nzval, P, P_zero, map.P)
+    _csr_fill_block_gpu(rowptr, colval, nzval, At, map.At, one(Cint), Cint(n+1))
+    _csr_fill_block_gpu(rowptr, colval, nzval, A, map.A, Cint(n+1), one(Cint))
 
-    # track the next sparse column to fill (assuming full fill)
-    pcol = m + n + 1 #next sparse column to fill
-    sparse_map_iter = Iterators.Stateful(map.sparse_maps)
-
-    for (i,cone) = enumerate(cones)
-        row = first(cones.rng_cones[i]) + n
-
-        #add the the Hs blocks in the lower right
-        blockdim = numel(cone)
-        block    = view(map.Hsblocks,cones.rng_blocks[i])
-
-        if Hs_is_diagonal(cone)
-            _csc_fill_diag(K,block,row,blockdim)
-        else
-            _csc_fill_dense_full(K,block,row,blockdim)
+    #filling Hessian blocks for cones
+    n_linear = cones.n_linear
+    n_rec = cones.n_soc + cones.n_exp + cones.n_pow + cones.n_psd
+    rng_cones = cones.rng_cones
+    rng_blocks = cones.rng_blocks
+    CUDA.@allowscalar begin
+        for i in cones.idx_eq
+            row = first(rng_cones[i]) + n
+            block = view(map.Hsblocks,rng_blocks[i])
+            _csr_fill_diag_gpu(rowptr, colval, nzval, block, row, Cint(length(block)))
         end
+        for i in cones.idx_inq
+            row = first(rng_cones[i]) + n
+            block = view(map.Hsblocks,rng_blocks[i])
+            _csr_fill_diag_gpu(rowptr, colval, nzval, block, row, Cint(length(block)))
+        end
+    end
+    CUDA.synchronize()
 
-        #add sparse expansions columns for sparse cones 
-        if @conedispatch is_sparse_expandable(cone) 
-            thismap = popfirst!(sparse_map_iter)
-            _csc_fill_sparsecone_full(cone,thismap,K,row,pcol)
-            pcol += pdim(thismap) #next sparse column to fill 
-        end 
+    if (n_rec > 0)
+        _csr_fill_dense_full_gpu(rowptr, colval, nzval, map.Hsblocks, rng_cones, rng_blocks, n_linear, Cint(n), n_rec)
     end
     
     #backshift the colptrs to recover K.p again
-    _kkt_backshift_colptrs(K)
+    _kkt_backshift_colptrs_gpu(rowptr)
 
     #Now we can populate the index of the full diagonal.
     #We have filled in structural zeros on it everywhere.
 
-    _map_diag_full(K,map.diag_full)
-    @views map.diagP     .= map.diag_full[1:n]
+    _map_diag_full_gpu(rowptr, colval, map.diag_full)
+    CUDA.@sync @views map.diagP     .= map.diag_full[1:n]
 
     return nothing
 end

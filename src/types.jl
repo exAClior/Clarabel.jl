@@ -133,19 +133,13 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
     #scaling matrices for problem data equilibration
     #fields d,e,dinv,einv are vectors of scaling values
     #to be treated as diagonal scaling data
-    d::Vector{T}
-    dinv::Vector{T}
-    e::Vector{T}
-    einv::Vector{T}
+    d::AbstractVector{T}
+    dinv::AbstractVector{T}
+    e::AbstractVector{T}
+    einv::AbstractVector{T}
 
     #overall scaling for objective function
-    c::Base.RefValue{T}
-
-    #GPU data
-    d_gpu::AbstractVector{T}
-    dinv_gpu::AbstractVector{T}
-    e_gpu::AbstractVector{T}
-    einv_gpu::AbstractVector{T}    
+    c::Base.RefValue{T} 
 
     function DefaultEquilibration{T}(
         n::DefaultInt,
@@ -153,27 +147,15 @@ struct DefaultEquilibration{T} <: AbstractEquilibration{T}
         use_gpu::Bool
     ) where {T}
 
-        #Left/Right diagonal scaling for problem data
-        d    = ones(T,n)
-        dinv = ones(T,n)
-        e    = ones(T,m)
-        einv = ones(T,m)
-
         c    = Ref(T(1.))
 
-        if use_gpu
-            d_gpu = n > 0 ? unsafe_wrap(CuArray{T,1},d) : CUDA.zeros(T,0)
-            dinv_gpu = n > 0 ? unsafe_wrap(CuArray{T,1},dinv) : CUDA.zeros(T,0)
-            e_gpu = m > 0 ? unsafe_wrap(CuArray{T,1},e) : CUDA.zeros(T,0)
-            einv_gpu = m > 0 ? unsafe_wrap(CuArray{T,1},einv) : CUDA.zeros(T,0)
-        else
-            d_gpu = Vector{Float64}()
-            dinv_gpu = Vector{Float64}()
-            e_gpu = Vector{Float64}()
-            einv_gpu = Vector{Float64}()
-        end
+        #Left/Right diagonal scaling for problem data
+        d    = (use_gpu) ? CUDA.ones(T,n) : ones(T,n)
+        dinv = (use_gpu) ? CUDA.ones(T,n) : ones(T,n)
+        e    = (use_gpu) ? CUDA.ones(T,m) : ones(T,m)
+        einv = (use_gpu) ? CUDA.ones(T,m) : ones(T,m)
 
-        new(d,dinv,e,einv,c,d_gpu,dinv_gpu,e_gpu,einv_gpu)
+        new(d,dinv,e,einv,c)
     end
 
 end

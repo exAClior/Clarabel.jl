@@ -97,6 +97,7 @@ module Clarabel
     #various algebraic utilities
     include("./utils/mathutils.jl")
     include("./utils/csc_assembly.jl")
+    include("./utils/csc_assembly_gpu.jl")
 
     #data updating
     include("./data_updating.jl")

@@ -4,7 +4,7 @@ using CUDSS
 export CUDSSDirectLDLSolverMixed
 struct CUDSSDirectLDLSolverMixed{T} <: AbstractGPUSolver{T}
 
-    KKTgpu::AbstractSparseMatrix{T}
+    KKT::AbstractSparseMatrix{T}
     cudssSolver::CUDSS.CudssSolver{Float32}
 
     KKTFloat32::AbstractSparseMatrix{Float32}
@@ -19,10 +19,8 @@ struct CUDSSDirectLDLSolverMixed{T} <: AbstractGPUSolver{T}
         #make a logical factorization to fix memory allocations
         # "S" denotes real symmetric and 'U' denotes the upper triangular
 
-        KKTgpu = KKT
-
-        val = CuVector{Float32}(KKTgpu.nzVal)
-        KKTFloat32 = CuSparseMatrixCSR(KKTgpu.rowPtr,KKTgpu.colVal,val,size(KKTgpu))
+        val = CuVector{Float32}(KKT.nzVal)
+        KKTFloat32 = CuSparseMatrixCSR(KKT.rowPtr,KKT.colVal,val,size(KKT))
         cudssSolver = CUDSS.CudssSolver(KKTFloat32, "S", 'F')
 
         xFloat32 = CUDA.zeros(Float32,dim)
@@ -32,7 +30,7 @@ struct CUDSSDirectLDLSolverMixed{T} <: AbstractGPUSolver{T}
         cudss("factorization", cudssSolver, xFloat32, bFloat32)
 
 
-        return new(KKTgpu,cudssSolver,KKTFloat32,xFloat32,bFloat32)
+        return new(KKT,cudssSolver,KKTFloat32,xFloat32,bFloat32)
     end
 
 end
@@ -44,7 +42,7 @@ required_matrix_shape(::Type{CUDSSDirectLDLSolverMixed}) = :full
 function refactor!(ldlsolver::CUDSSDirectLDLSolverMixed{T}) where{T}
 
     #YC: Copy data from a Float64 matrix to Float32 matrix
-    copyto!(ldlsolver.KKTFloat32.nzVal,ldlsolver.KKTgpu.nzVal)
+    copyto!(ldlsolver.KKTFloat32.nzVal,ldlsolver.KKT.nzVal)
 
     # Update the KKT matrix in the cudss solver
     cudss_set(ldlsolver.cudssSolver.matrix,ldlsolver.KKTFloat32)

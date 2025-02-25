@@ -1,3 +1,4 @@
+import CUDA.CUSPARSE: CuSparseDeviceMatrixCSR
 import CUDA.CUBLAS: unsafe_strided_batch, handle
 import CUDA.CUBLAS: cublasStatus_t, cublasHandle_t, cublasFillMode_t
 import CUDA.CUSOLVER: cusolverDnHandle_t, cusolverStatus_t
@@ -5,6 +6,211 @@ import CUDA: unsafe_free!
 using LinearAlgebra.LAPACK: chkargsok, chklapackerror, chktrans, chkside, chkdiag, chkuplo
 # using Libdl
 
+#############################################
+#  converts an elementwise scaling into
+# a scaling that preserves cone memership
+#############################################
+function _kernel_rectify_equilibration!(
+    δ::AbstractVector{T},
+    e::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_rec::Cint
+ ) where{T}
+ 
+     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+ 
+     if i <= n_rec
+         shift_i = i + n_shift
+         rng_cone_i = rng_cones[shift_i]
+         @views δi = δ[rng_cone_i] 
+         @views ei = e[rng_cone_i] 
+
+     
+        #all cones default to scalar equilibration
+        #unless otherwise specified
+        tmp    = mean(ei)
+        @inbounds for j in 1:length(rng_cone_i)
+            δi[j]    = tmp / ei[j]
+        end
+     end
+ 
+     return nothing
+ end
+
+@inline function rectify_equilibration_gpu!(
+    δ::AbstractVector{T},
+    e::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_rec::Cint
+ ) where{T}
+ 
+    kernel = @cuda launch=false _kernel_rectify_equilibration!(δ, e, rng_cones, n_shift, n_rec)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_rec, config.threads)
+    blocks = cld(n_rec, threads)
+
+    CUDA.@sync kernel(δ, e, rng_cones, n_shift, n_rec; threads, blocks)
+ end
+
+
+ ############################################
+ # Operations for equilibration
+ ############################################
+ @inline function kkt_row_norms_gpu!(
+    P::AbstractSparseMatrix{T},
+    A::AbstractSparseMatrix{T},
+    At::AbstractSparseMatrix{T},
+    norm_LHS::AbstractVector{T},
+    norm_RHS::AbstractVector{T}
+) where {T}
+
+    row_norms_gpu!(norm_LHS, P)   # P is a full CSR matrix on GPU
+	row_norms_no_reset!(norm_LHS, At)       #incrementally from P norms
+	row_norms_gpu!(norm_RHS, A)                      #A is a CSR matrix on GPU
+
+	return nothing
+end
+
+function _kernel_row_norms!(
+    norms::AbstractVector{T},
+	A::AbstractSparseMatrix{T}
+ ) where{T}
+ 
+     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+ 
+     if i <= length(norms)
+        @inbounds for j = A.rowPtr[i]:(A.rowPtr[i + 1] - 1)
+			tmp = abs(A.nzVal[j])
+			norms[i] = norms[i] > tmp ? norms[i] : tmp
+		end
+     end
+ 
+     return nothing
+ end
+
+@inline function row_norms_gpu!(
+    norms::AbstractVector{T},
+	A::AbstractSparseMatrix{T}
+) where{T <: AbstractFloat}
+
+    fill!(norms, zero(T))
+    return row_norms_no_reset!(norms,A)
+end
+
+@inline function row_norms_no_reset!(
+    norms::AbstractVector{T},
+	A::AbstractSparseMatrix{T};
+	reset::Bool = true
+) where{T <: AbstractFloat}
+    n = length(norms)
+
+    kernel = @cuda launch=false _kernel_row_norms!(norms, A)
+    config = launch_configuration(kernel.fun)
+    threads = min(n, config.threads)
+    blocks = cld(n, threads)
+
+    CUDA.@sync kernel(norms, A; threads, blocks)
+	return nothing
+end
+
+@inline function scalarmul_gpu!(A::AbstractSparseMatrix{T}, c::T) where {T}
+	CUDA.@sync @. A.nzVal *= c
+end
+
+function _kernel_lrscale_gpu!(L::AbstractVector{T}, M::AbstractSparseMatrix{T}, R::AbstractVector{T}) where {T <: AbstractFloat}
+
+	m, n = size(M)
+	Mnzval  = M.nzVal
+	Mrowptr = M.rowPtr
+	Mcolval = M.colVal
+
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+	if i <= m
+		for j = Mrowptr[i]:(Mrowptr[i + 1] - 1)
+	 		Mnzval[j] *= R[Mcolval[j]] * L[i]
+		end
+	end
+	return nothing
+end
+
+@inline function lrscale_gpu!(L::AbstractVector{T}, M::AbstractSparseMatrix{T}, R::AbstractVector{T}) where {T <: AbstractFloat}
+
+	m, n = size(M)
+	(m == length(L) && n == length(R)) || throw(DimensionMismatch())
+
+    kernel = @cuda launch=false _kernel_lrscale_gpu!(L, M, R)
+    config = launch_configuration(kernel.fun)
+    threads = min(m, config.threads)
+    blocks = cld(m, threads)
+
+    CUDA.@sync kernel(L, M, R; threads, blocks)
+	return nothing
+end
+
+function _kernel_lscale_gpu!(L::AbstractVector{T}, M::AbstractSparseMatrix{T}) where {T <: AbstractFloat}
+
+	m, n = size(M)
+	Mnzval  = M.nzVal
+	Mrowptr = M.rowPtr
+
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+	if i <= m
+		for j = Mrowptr[i]:(Mrowptr[i + 1] - 1)
+	 		Mnzval[j] *= L[i]
+		end
+	end
+	return nothing
+end
+
+@inline function lscale_gpu!(L::AbstractVector{T}, M::AbstractSparseMatrix{T}) where {T <: AbstractFloat}
+
+	#NB : Same as:  @views M.nzval .*= L[M.rowval]
+	#but this way allocates no memory at all and
+	#is marginally faster
+	m, n = size(M)
+	(m == length(L)) || throw(DimensionMismatch())
+
+    kernel = @cuda launch=false _kernel_lscale_gpu!(L, M)
+    config = launch_configuration(kernel.fun)
+    threads = min(m, config.threads)
+    blocks = cld(m, threads)
+
+    CUDA.@sync kernel(L, M; threads, blocks)
+end
+
+function _kernel_rscale_gpu!(M::AbstractSparseMatrix{T}, R::AbstractVector{T}) where {T <: AbstractFloat}
+
+	m, n = size(M)
+	Mnzval  = M.nzVal
+	Mrowptr = M.rowPtr
+    Mcolval = M.colVal
+
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+	if i <= m
+		for j = Mrowptr[i]:(Mrowptr[i + 1] - 1)
+	 		Mnzval[j] *= R[Mcolval[j]]
+		end
+	end
+	return nothing
+end
+
+@inline function rscale_gpu!(M::AbstractSparseMatrix{T}, R::AbstractVector{T}) where {T <: AbstractFloat}
+
+	#NB : Same as:  @views M.nzval .*= L[M.rowval]
+	#but this way allocates no memory at all and
+	#is marginally faster
+	m, n = size(M)
+	(n == length(R)) || throw(DimensionMismatch())
+
+    kernel = @cuda launch=false _kernel_rscale_gpu!(M, R)
+    config = launch_configuration(kernel.fun)
+    threads = min(m, config.threads)
+    blocks = cld(m, threads)
+
+    CUDA.@sync kernel(M, R; threads, blocks)
+end
 
 #############################################
 # dot operator
@@ -137,7 +343,7 @@ end
 end
 
 #########################################################
-# lrscale
+# lrscale for psd cones
 #########################################################
 function _kernel_lrscale!(
     A::AbstractArray{T, 3},
@@ -156,7 +362,7 @@ function _kernel_lrscale!(
     return nothing
 end
 
-@inline function lrscale_gpu!(
+@inline function lrscale_psd!(
     A::AbstractArray{T,3},
     d::AbstractMatrix{T}
 ) where {T}

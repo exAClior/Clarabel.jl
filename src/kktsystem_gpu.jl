@@ -25,14 +25,14 @@ mutable struct DefaultKKTSystemGPU{T} <: AbstractKKTSystem{T}
 
         function DefaultKKTSystemGPU{T}(
             data::DefaultProblemData{T},
-            cones::CompositeCone{T},
+            cones::CompositeConeGPU{T},
             settings::Settings{T}
         ) where {T}
 
         #basic problem dimensions
         (m, n) = (data.m, data.n)
 
-        kktsolver = GPULDLKKTSolver{T}(data.P,data.A,cones,m,n,settings)
+        kktsolver = GPULDLKKTSolver{T}(data.P_gpu, data.A_gpu, data.At_gpu, cones, m, n, settings)
 
         #the LHS constant part of the reduced solve
         x1   = CuVector{T}(undef,n)
@@ -154,8 +154,7 @@ function kkt_solve!(
     Δs_const_term = kktsystem.work_conic
 
     if steptype == :affine
-        @. Δs_const_term = variables.s
-
+        CUDA.@sync @. Δs_const_term = variables.s
     else  #:combined expected, but any general RHS should do this
         #we can use the overall LHS output as additional workspace for the moment
         Δs_from_Δz_offset!(cones,Δs_const_term,rhs.s,lhs.z,variables.z)

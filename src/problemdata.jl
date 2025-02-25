@@ -211,6 +211,96 @@ function data_equilibrate!(
 	return nothing
 end
 
+function data_equilibrate!(
+	data::DefaultProblemData{T},
+	cones::CompositeConeGPU{T},
+	settings::Settings{T}
+) where {T}
+
+	equil = data.equilibration
+
+	#if equilibration is disabled, just return.  Note that
+	#the default equilibration structure initializes with
+	#identity scaling already.
+	if(!settings.equilibrate_enable)
+		return
+	end
+
+	#references to scaling matrices from workspace
+	(c,d,e) = (equil.c,equil.d,equil.e)
+
+	#use the inverse scalings as work vectors
+	dwork = equil.dinv
+	ework = equil.einv
+
+	#references to problem data
+	#note that P may be triu, but it shouldn't matter
+	(P, A, At, q, b) = (data.P_gpu, data.A_gpu, data.At_gpu, data.q_gpu, data.b_gpu)
+
+	scale_min = settings.equilibrate_min_scaling
+	scale_max = settings.equilibrate_max_scaling
+
+	#perform scaling operations for a fixed number of steps
+	for i = 1:settings.equilibrate_max_iter
+
+		kkt_row_norms_gpu!(P, A, At, dwork, ework)
+
+		#zero rows or columns should not get scaled
+		CUDA.@sync @. dwork = ifelse(dwork == zero(T),one(T),dwork)
+		CUDA.@sync @. ework = ifelse(ework == zero(T),one(T),ework)
+
+		CUDA.@sync dwork .= inv.(sqrt.(dwork))
+		CUDA.@sync ework .= inv.(sqrt.(ework))
+
+		#bound the cumulative scaling 
+		CUDA.@sync @. dwork = clip(dwork, scale_min/d, scale_max/d)
+		CUDA.@sync @. ework = clip(ework, scale_min/e, scale_max/e)
+
+		# Scale the problem data and update the
+		# equilibration matrices
+		scale_data_gpu!(P, A, At, q, b, dwork, ework)
+		CUDA.@sync @. d *= dwork
+		CUDA.@sync @. e *= ework
+
+		# now use the Dwork array to hold the
+		# column norms of the newly scaled P
+		# so that we can compute the mean
+		row_norms_gpu!(dwork, P)
+		mean_col_norm_P = mean(dwork)
+		inf_norm_q      = norm(q, Inf)
+
+		if mean_col_norm_P  != zero(T) && inf_norm_q != zero(T)
+
+			scale_cost = max(inf_norm_q, mean_col_norm_P)
+			ctmp = one(T) / scale_cost
+			ctmp = clip(ctmp, scale_min/c[], scale_max/c[])
+
+			# scale the penalty terms and overall scaling
+			scalarmul_gpu!(P, ctmp)
+			q       .*= ctmp
+			c[]      *= ctmp
+		end
+
+	end #end Ruiz scaling loop
+
+	# fix scalings in cones for which elementwise
+	# scaling can't be applied.   Rectification should 
+	# either do nothing or take a convex combination of
+	# scalings over a cone, so shouldn't need to check  
+	# bounds on the scalings here 
+	if rectify_equilibration!(cones, ework, e)
+		#only rescale again if some cones were rectified
+		scale_data_gpu!(P, A, At, q, b, nothing, ework)
+		CUDA.@sync @. e *= ework
+	end
+
+	#update the inverse scaling data
+	CUDA.@sync @. equil.dinv = one(T) / d
+	CUDA.@sync @. equil.einv = one(T) / e
+
+	return nothing
+end
+
 
 function scale_data!(
     P::AbstractMatrix{T},
@@ -230,6 +320,30 @@ function scale_data!(
     end
 
 	@. b *= e
+    return nothing
+end
+
+function scale_data_gpu!(
+    P::AbstractSparseMatrix{T},
+    A::AbstractSparseMatrix{T},
+	At::AbstractSparseMatrix{T},
+    q::AbstractVector{T},
+    b::AbstractVector{T},
+    d::Option{AbstractVector{T}},
+    e::AbstractVector{T}
+) where {T <: AbstractFloat}
+
+	if(!isnothing(d))
+		lrscale_gpu!(d, P, d) # P[:,:] = Ds*P*Ds
+		lrscale_gpu!(e, A, d) # A[:,:] = Es*A*Ds
+		lrscale_gpu!(d, At, e) # A[:,:] = Ds*At*Es
+		CUDA.@sync @. q *= d
+    else
+        lscale_gpu!(e, A) 	# A[:,:] = Es*A
+		rscale_gpu!(At, e) 	# At[:,:] = At*Es
+    end
+
+	CUDA.@sync @. b *= e
     return nothing
 end
 

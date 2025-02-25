@@ -21,19 +21,17 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
     work2::AbstractVector{T}
 
     #KKT mapping from problem data to KKT
-    mapcpu::FullDataMap
-    mapgpu::GPUDataMap 
+    map::GPUDataMap 
 
     #the expected signs of D in KKT = LDL^T
-    Dsigns::AbstractVector{Int}
+    Dsigns::AbstractVector{Cint}
 
     # a vector for storing the Hs blocks
     # on the in the KKT matrix block diagonal
     Hsblocks::AbstractVector{T}
 
     #unpermuted KKT matrix
-    KKTcpu::SparseMatrixCSC{T,Int}
-    KKTgpu::AbstractCuSparseMatrix{T}
+    KKT::AbstractCuSparseMatrix{T}
 
     #settings just points back to the main solver settings.
     #Required since there is no separate LDL settings container
@@ -45,22 +43,24 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
     #the diagonal regularizer currently applied
     diagonal_regularizer::T
 
-    function GPULDLKKTSolver{T}(P,A,cones,m,n,settings) where {T}
+    function GPULDLKKTSolver{T}(
+        P::AbstractCuSparseMatrix{T},
+        A::AbstractCuSparseMatrix{T},
+        At::AbstractCuSparseMatrix{T},
+        cones::CompositeConeGPU{T},
+        m::Int64,
+        n::Int64,
+        settings::Settings{T}
+    ) where {T}
 
         # get a constructor for the LDL solver we should use,
         # and also the matrix shape it requires
         (kktshape, GPUsolverT) = _get_GPUsolver_config(settings)
 
         #construct a KKT matrix of the right shape
-        KKTcpu, mapcpu = _assemble_full_kkt_matrix(P,A,cones,kktshape)
-        KKTgpu = CuSparseMatrixCSR(KKTcpu)
-
-        #YC: update GPU map, should be removed later on
-        mapgpu   = GPUDataMap(P,A,cones,mapcpu)
+        KKT, map = _assemble_full_kkt_matrix(P,A,At,cones)
 
         #YC: disabled sparse expansion and preprocess a large second-order cone into multiple small cones
-        p = pdim(mapcpu.sparse_maps)
-        @assert(iszero(p))
 
         #updates to the diagonal of KKT will be
         #assigned here before updating matrix entries
@@ -73,22 +73,20 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         work2 = CuVector{T}(undef,dim)
 
         #the expected signs of D in LDL
-        Dsigns_cpu = Vector{Int}(undef,dim)
-        _fill_Dsigns!(Dsigns_cpu,m,n,mapcpu)       #This is run on CPU
-        Dsigns = CuVector(Dsigns_cpu)
+        Dsigns = CUDA.ones(Cint,dim)
+        @views fill!(Dsigns[n+1:n+m], -one(Cint))
 
-        Hsblocks = CuVector(_allocate_kkt_Hsblocks(T, cones))
-
+        Hsblocks = map.Hsblocks
         diagonal_regularizer = zero(T)
 
         #the indirect linear solver engine
-        GPUsolver = GPUsolverT{T}(KKTgpu,x,b)
+        GPUsolver = GPUsolverT{T}(KKT,x,b)
 
         return new(m,n,x,b,
-                   work1,work2,mapcpu,mapgpu,
+                   work1,work2,map,
                    Dsigns,
                    Hsblocks,
-                   KKTcpu,KKTgpu,settings,GPUsolver,
+                   KKT,settings,GPUsolver,
                    diagonal_regularizer
                    )
     end
@@ -167,8 +165,8 @@ function _kktsolver_update_inner!(
     #real implementation is here, and now  GPUsolver
     #will be compiled to something concrete.
 
-    map       = kktsolver.mapgpu
-    KKT       = kktsolver.KKTgpu
+    map       = kktsolver.map
+    KKT       = kktsolver.KKT
 
     #Set the elements the W^tW blocks in the KKT matrix.
     # get_Hs!(cones,kktsolver.Hsblockscpu,false)
@@ -187,8 +185,8 @@ function _kktsolver_regularize_and_refactor!(
 ) where{T}
 
     settings      = kktsolver.settings
-    map           = kktsolver.mapgpu
-    KKTgpu        = kktsolver.KKTgpu
+    map           = kktsolver.map
+    KKT        = kktsolver.KKT
     Dsigns        = kktsolver.Dsigns
     diag_kkt      = kktsolver.work1
     diag_shifted  = kktsolver.work2
@@ -197,7 +195,7 @@ function _kktsolver_regularize_and_refactor!(
     if(settings.static_regularization_enable)
 
         # hold a copy of the true KKT diagonal
-        @views diag_kkt .= KKTgpu.nzVal[map.diag_full]
+        @views diag_kkt .= KKT.nzVal[map.diag_full]
         ϵ = _compute_regularizer(diag_kkt, settings)
 
         # compute an offset version, accounting for signs
@@ -206,7 +204,7 @@ function _kktsolver_regularize_and_refactor!(
         diag_shifted .+= Dsigns*ϵ
 
         # overwrite the diagonal of KKT and within the  GPUsolver
-        _update_diag_values_KKT!(KKTgpu,map.diag_full,diag_shifted)
+        _update_diag_values_KKT!(KKT,map.diag_full,diag_shifted)
 
         # remember the value we used.  Not needed,
         # but possibly useful for debugging
@@ -222,28 +220,12 @@ function _kktsolver_regularize_and_refactor!(
         # it was. Not necessary to fix the  GPUsolver copy because
         # this is only needed for our post-factorization IR scheme
 
-        _update_diag_values_KKT!(KKTgpu,map.diag_full,diag_kkt)
+        _update_diag_values_KKT!(KKT,map.diag_full,diag_kkt)
 
     end
 
     return is_success
 end
-
-
-# function _compute_regularizer(
-#     diag_kkt::AbstractVector{T},
-#     settings::Settings{T}
-# ) where {T}
-
-#     maxdiag  = norm(diag_kkt,Inf);
-
-#     # Compute a new regularizer
-#     regularizer =  settings.static_regularization_constant +
-#                    settings.static_regularization_proportional * maxdiag
-
-#     return regularizer
-
-# end
 
 
 function kktsolver_setrhs!(
@@ -324,7 +306,7 @@ function  _iterative_refinement(
     IR_maxiter   = settings.iterative_refinement_max_iter
     IR_stopratio = settings.iterative_refinement_stop_ratio
 
-    KKT = kktsolver.KKTgpu
+    KKT = kktsolver.KKT
     normb  = norm(b,Inf)
 
     #compute the initial error

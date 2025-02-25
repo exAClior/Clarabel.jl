@@ -4,7 +4,7 @@ using CUDSS
 export CUDSSDirectLDLSolver
 struct CUDSSDirectLDLSolver{T} <: AbstractGPUSolver{T}
 
-    KKTgpu::AbstractSparseMatrix{T}
+    KKT::AbstractSparseMatrix{T}
     cudssSolver::CUDSS.CudssSolver{T}
     x::AbstractVector{T}
     b::AbstractVector{T}
@@ -12,18 +12,17 @@ struct CUDSSDirectLDLSolver{T} <: AbstractGPUSolver{T}
 
     function CUDSSDirectLDLSolver{T}(KKT::AbstractSparseMatrix{T},x,b) where {T}
 
-        dim = LinearAlgebra.checksquare(KKT)
+        LinearAlgebra.checksquare(KKT)
 
         #make a logical factorization to fix memory allocations
         # "S" denotes real symmetric and 'U' denotes the upper triangular
 
-        KKTgpu = KKT
-        cudssSolver = CUDSS.CudssSolver(KKTgpu, "S", 'F')
+        cudssSolver = CUDSS.CudssSolver(KKT, "S", 'F')
 
         cudss("analysis", cudssSolver, x, b)
         cudss("factorization", cudssSolver, x, b)
 
-        return new(KKTgpu,cudssSolver,x,b)
+        return new(KKT,cudssSolver,x,b)
     end
 
 end
@@ -35,7 +34,7 @@ required_matrix_shape(::Type{CUDSSDirectLDLSolver}) = :full
 function refactor!(ldlsolver::CUDSSDirectLDLSolver{T}) where{T}
 
     # Update the KKT matrix in the cudss solver
-    cudss_set(ldlsolver.cudssSolver.matrix,ldlsolver.KKTgpu)
+    cudss_set(ldlsolver.cudssSolver.matrix,ldlsolver.KKT)
 
     # Refactorization
     cudss("factorization", ldlsolver.cudssSolver, ldlsolver.x, ldlsolver.b)

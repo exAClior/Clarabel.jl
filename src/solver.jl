@@ -115,20 +115,20 @@ function setup!(
         s.variables = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
         s.residuals = DefaultResiduals{T}(s.data.n,s.data.m,s.use_gpu)
 
+        if s.use_gpu
+            gpu_data_copy!(s.data)  #YC: copy data to GPU, should be optimized later
+        end
+
         #equilibrate problem data immediately on setup.
         #this prevents multiple equlibrations if solve!
         #is called more than once.
         @timeit s.timers "equilibration" begin
-            data_equilibrate!(s.data,cpucones,s.settings)
+            data_equilibrate!(s.data,s.cones,s.settings)
         end
       
         @timeit s.timers "kkt init" begin
-            if s.use_gpu
-                gpu_data_copy!(s.data)  #YC: copy data to GPU, should be optimized later
-                s.kktsystem = DefaultKKTSystemGPU{T}(s.data,cpucones,s.settings)
-            else
-                s.kktsystem = DefaultKKTSystem{T}(s.data,s.cones,s.settings)
-            end
+            DefaultKKTsys = s.use_gpu ? DefaultKKTSystemGPU : DefaultKKTSystem
+            s.kktsystem = DefaultKKTsys{T}(s.data,s.cones,s.settings)
         end
 
         # work variables for assembling step direction LHS/RHS
