@@ -58,7 +58,7 @@ struct CompositeCone{T} <: AbstractCone{T}
         #in the Hs sparse block
 
         rng_cones  = collect(rng_cones_iterator(cones));
-        rng_blocks = collect(rng_blocks_iterator(cones,use_gpu));
+        rng_blocks = collect(rng_blocks_iterator(cones));
 
         obj = new(cones,type_counts,numel,degree,rng_cones,rng_blocks,_is_symmetric)
     end
@@ -104,8 +104,8 @@ function rng_cones_iterator(cones::Vector{AbstractCone{T}}) where{T}
     RangeConesIterator(cones)
 end
 
-function rng_blocks_iterator(cones::Vector{AbstractCone{T}},use_gpu) where{T}
-    use_gpu ? RangeBlocksIteratorFull(cones) : RangeBlocksIterator(cones)
+function rng_blocks_iterator(cones::Vector{AbstractCone{T}}) where{T}
+    RangeBlocksIterator(cones)
 end
 
 Base.length(iter::RangeConesIterator) =  length(iter.cones)
@@ -134,37 +134,6 @@ function Base.iterate(iter::RangeBlocksIterator, state=(1, 1))
             stop = start + nvars - 1
         else
             stop = start + triangular_number(nvars) - 1
-        end
-        state = (coneidx + 1, stop + 1)
-        return (start:stop, state)
-    end 
-end 
-
-
-# -------------------------------------
-# iterators to generate indices into vectors 
-# in a cone or cone-related blocks in the Hessian
-struct RangeBlocksIteratorFull{T} 
-    cones::AbstractVector{AbstractCone{T}}
-end
-
-function rng_blocks_iterator_full(cones::Vector{AbstractCone{T}}) where{T}
-    RangeBlocksIteratorFull(cones)
-end
-
-Base.length(iter::RangeBlocksIteratorFull) = length(iter.cones)
-
-function Base.iterate(iter::RangeBlocksIteratorFull, state=(1, 1)) 
-    (coneidx, start) = state 
-    if coneidx > length(iter.cones)
-        return nothing 
-    else 
-        cone = iter.cones[coneidx]
-        nvars = numel(cone)
-        if Hs_is_diagonal(cone)
-            stop = start + nvars - 1
-        else
-            stop = start + nvars*nvars - 1
         end
         state = (coneidx + 1, stop + 1)
         return (start:stop, state)

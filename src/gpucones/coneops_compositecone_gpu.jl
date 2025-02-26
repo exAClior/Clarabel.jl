@@ -13,7 +13,8 @@ function is_symmetric(cones::CompositeConeGPU{T}) where {T}
 end
 
 function allows_primal_dual_scaling(cones::CompositeConeGPU{T}) where {T}
-    all(allows_primal_dual_scaling, cones)
+    # always true for the GPU settings
+    return true                         #
 end
 
 

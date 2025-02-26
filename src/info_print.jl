@@ -16,7 +16,7 @@ function info_print_configuration(
     info::DefaultInfo{T},
     settings::Settings{T},
     data::DefaultProblemData{T},
-    cones::Union{CompositeCone{T},CompositeConeGPU{T}}
+    cones::CompositeCone{T}
 ) where {T}
 
     if(settings.verbose == false) return end
@@ -42,6 +42,43 @@ function info_print_configuration(
     print_conedims_by_type(io, cones, PowerCone)
     print_conedims_by_type(io, cones, GenPowerCone)
     print_conedims_by_type(io, cones, PSDTriangleCone)
+    print_settings(io, settings)
+    @printf(io, "\n")
+
+    return nothing
+end
+
+function info_print_configuration(
+    io::IO,
+    info::DefaultInfo{T},
+    settings::Settings{T},
+    data::DefaultProblemData{T},
+    cones::CompositeConeGPU{T}
+) where {T}
+
+    if(settings.verbose == false) return end
+
+    if(!isnothing(data.presolver))
+        @printf(io, "\npresolve: removed %i constraints\n", count_reduced(data.presolver))
+    end 
+
+    if(!isnothing(data.chordal_info))
+        print_chordal_decomposition(io, data.chordal_info, settings)
+    end
+
+    @printf(io, "\nproblem:\n")
+    @printf(io, "  variables     = %i\n", data.n)
+    @printf(io, "  constraints   = %i\n", data.m)
+    @printf(io, "  nnz(P)        = %i\n", nnz(data.P))
+    @printf(io, "  nnz(A)        = %i\n", nnz(data.A))
+    @printf(io, "  cones (total) = %i\n", length(data.cones))
+    print_conedims_by_type(io, cones, data.cones, Clarabel.ZeroConeT)
+    print_conedims_by_type(io, cones, data.cones, Clarabel.NonnegativeConeT)
+    print_conedims_by_type(io, cones, data.cones, Clarabel.SecondOrderConeT)
+    print_conedims_by_type(io, cones, data.cones, Clarabel.ExponentialConeT)
+    print_conedims_by_type(io, cones, data.cones, Clarabel.PowerConeT)
+    print_conedims_by_type(io, cones, data.cones, Clarabel.GenPowerConeT)
+    print_conedims_by_type(io, cones, data.cones, Clarabel.PSDTriangleConeT)
     print_settings(io, settings)
     @printf(io, "\n")
 
@@ -204,7 +241,7 @@ get_precision_string(T::Type{<:Real}) = string(T)
 get_precision_string(T::Type{<:BigFloat}) = string(T," (", precision(T), " bit)")
 
 
-function print_conedims_by_type(io::IO, cones::Union{CompositeCone{T},CompositeConeGPU{T}}, type::Type) where {T}
+function print_conedims_by_type(io::IO, cones::CompositeCone{T}, type::Type) where {T}
 
     maxlistlen = 5
 
@@ -240,3 +277,37 @@ function print_conedims_by_type(io::IO, cones::Union{CompositeCone{T},CompositeC
 
 end
 
+function print_conedims_by_type(io::IO, cones::CompositeConeGPU{T}, cone_specs::Vector{SupportedCone}, type::DataType) where {T}
+
+    maxlistlen = 5
+
+    #how many of this type of cone?
+    count = get_type_count(cones,type)
+    #skip if there are none of this type
+    if count == 0
+        return #don't report if none
+    end
+
+    nvars = DefaultInt[Clarabel.nvars(K) for K in cone_specs[isa.(cone_specs,type)]]
+    name  = rpad(string(nameof(ConeDict[type]))[1:end-4],11)  #drops "Cone" part
+    @printf(io, "    : %s = %i, ", name, count)
+
+    if count == 1
+        @printf(io, " numel = %i",nvars[1])
+
+    elseif count <= maxlistlen
+        #print them all
+        @printf(io, " numel = (")
+        foreach(x->@printf(io, "%i,",x),nvars[1:end-1])
+        @printf(io, "%i)",nvars[end])
+
+    else
+        #print first (maxlistlen-1) and the final one
+        @printf(io, " numel = (")
+        foreach(x->@printf(io, "%i,",x),nvars[1:(maxlistlen-1)])
+        @printf(io, "...,%i)",nvars[end])
+    end
+
+    @printf(io, "\n")
+
+end

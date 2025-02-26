@@ -107,17 +107,16 @@ function setup!(
             s.data = DefaultProblemData{T}(P,q,A,b,cones,s.settings)
         end 
 
-        cpucones  = CompositeCone{T}(s.data.cones,use_full)
-        s.cones  = s.use_gpu ? CompositeConeGPU{T}(cpucones) : cpucones
+        if s.use_gpu
+            gpu_data_copy!(s.data)  #YC: copy data to GPU, should be optimized later
+        end
+        
+        s.cones  = s.use_gpu ? CompositeConeGPU{T}(s.data.cones) : CompositeCone{T}(s.data.cones,use_full)
 
         s.data.m == s.cones.numel || throw(DimensionMismatch())
 
         s.variables = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
         s.residuals = DefaultResiduals{T}(s.data.n,s.data.m,s.use_gpu)
-
-        if s.use_gpu
-            gpu_data_copy!(s.data)  #YC: copy data to GPU, should be optimized later
-        end
 
         #equilibrate problem data immediately on setup.
         #this prevents multiple equlibrations if solve!
