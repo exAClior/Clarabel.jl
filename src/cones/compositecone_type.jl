@@ -25,7 +25,7 @@ struct CompositeCone{T} <: AbstractCone{T}
     # the flag for symmetric cone check
     _is_symmetric::Bool
 
-    function CompositeCone{T}(cone_specs::Vector{SupportedCone},use_gpu::Bool) where {T}
+    function CompositeCone{T}(cone_specs::Vector{SupportedCone}) where {T}
 
         cones  = sizehint!(AbstractCone{T}[],length(cone_specs))
 

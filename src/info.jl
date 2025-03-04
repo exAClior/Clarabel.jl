@@ -3,7 +3,7 @@ function info_update!(
     data::DefaultProblemData{T},
     variables::DefaultVariables{T},
     residuals::DefaultResiduals{T},
-    kktsystem::AbstractKKTSystem{T},
+    kktsystem::DefaultKKTSystem{T},
     settings::Settings{T},
     timers::TimerOutput
 ) where {T}
@@ -63,9 +63,9 @@ function info_update!(
 
 end
 
-function info_update_gpu!(
+function info_update!(
     info::DefaultInfo{T},
-    data::DefaultProblemData{T},
+    data::DefaultProblemDataGPU{T},
     variables::DefaultVariables{T},
     residuals::DefaultResiduals{T},
     kktsystem::DefaultKKTSystemGPU{T},

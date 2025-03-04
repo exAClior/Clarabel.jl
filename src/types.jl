@@ -188,16 +188,36 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
     presolver::Option{Presolver{T}}
     chordal_info::Option{ChordalInfo{T}}
 
-    #YC: temporary GPU data
-    P_gpu::Union{AbstractMatrix{T},Nothing}
-    q_gpu::Union{AbstractVector{T},Nothing}
-    A_gpu::Union{AbstractMatrix{T},Nothing}
-    At_gpu::Union{AbstractMatrix{T},Nothing}
-    b_gpu::Union{AbstractVector{T},Nothing}
-
 end
 
 DefaultProblemData(args...) = DefaultProblemData{DefaultFloat}(args...)
+
+
+mutable struct DefaultProblemDataGPU{T} <: AbstractProblemData{T}
+
+    P::AbstractSparseMatrix{T}
+    q::AbstractVector{T}
+    A::AbstractSparseMatrix{T}
+    At::AbstractSparseMatrix{T}
+    b::AbstractVector{T}
+    cones::Vector{SupportedCone}
+    n::DefaultInt
+    m::DefaultInt
+    equilibration::DefaultEquilibration{T}
+
+    # unscaled inf norms of linear terms.  Set to "nothing"
+    # during data updating to allow for multiple updates, and 
+    # then recalculated during solve if needed
+
+    normq::Option{T}  #unscaled inf norm of q
+    normb::Option{T}  #unscaled inf norm of b
+
+    presolver::Option{Presolver{T}}
+    chordal_info::Option{ChordalInfo{T}}
+
+end
+
+DefaultProblemDataGPU(args...) = DefaultProblemDataGPU{DefaultFloat}(args...)
 
 
 # ----------------------

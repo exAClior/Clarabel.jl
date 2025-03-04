@@ -24,7 +24,7 @@ mutable struct DefaultKKTSystemGPU{T} <: AbstractKKTSystem{T}
     workx2::AbstractVector{T}
 
         function DefaultKKTSystemGPU{T}(
-            data::DefaultProblemData{T},
+            data::DefaultProblemDataGPU{T},
             cones::CompositeConeGPU{T},
             settings::Settings{T}
         ) where {T}
@@ -32,7 +32,7 @@ mutable struct DefaultKKTSystemGPU{T} <: AbstractKKTSystem{T}
         #basic problem dimensions
         (m, n) = (data.m, data.n)
 
-        kktsolver = GPULDLKKTSolver{T}(data.P_gpu, data.A_gpu, data.At_gpu, cones, m, n, settings)
+        kktsolver = GPULDLKKTSolver{T}(data.P, data.A, data.At, cones, m, n, settings)
 
         #the LHS constant part of the reduced solve
         x1   = CuVector{T}(undef,n)
@@ -61,7 +61,7 @@ DefaultKKTSystemGPU(args...) = DefaultKKTSystemGPU{DefaultFloat}(args...)
 
 function kkt_update!(
     kktsystem::DefaultKKTSystemGPU{T},
-    data::DefaultProblemData{T},
+    data::DefaultProblemDataGPU{T},
     cones::CompositeConeGPU{T}
 ) where {T}
 
@@ -79,12 +79,12 @@ end
 
 function _kkt_solve_constant_rhs!(
     kktsystem::DefaultKKTSystemGPU{T},
-    data::DefaultProblemData{T}
+    data::DefaultProblemDataGPU{T}
 ) where {T}
 
-    @. kktsystem.workx = -data.q_gpu;
+    CUDA.@sync @. kktsystem.workx = -data.q;
 
-    kktsolver_setrhs!(kktsystem.kktsolver, kktsystem.workx, data.b_gpu)
+    kktsolver_setrhs!(kktsystem.kktsolver, kktsystem.workx, data.b)
     is_success = kktsolver_solve!(kktsystem.kktsolver, kktsystem.x2, kktsystem.z2)
 
     return is_success
@@ -95,7 +95,7 @@ end
 function kkt_solve_initial_point!(
     kktsystem::DefaultKKTSystemGPU{T},
     variables::DefaultVariables{T},
-    data::DefaultProblemData{T}
+    data::DefaultProblemDataGPU{T}
 ) where{T}
 
     if nnz(data.P) == 0
@@ -103,7 +103,9 @@ function kkt_solve_initial_point!(
         # solve with [0;b] as a RHS to get (x,-s) initializers
         # zero out any sparse cone variables at end
         kktsystem.workx .= zero(T)
-        kktsystem.workz .= data.b_gpu
+        kktsystem.workz .= data.b
+        CUDA.synchronize()
+        
         kktsolver_setrhs!(kktsystem.kktsolver, kktsystem.workx, kktsystem.workz)
         is_success = kktsolver_solve!(kktsystem.kktsolver, variables.x, variables.s)
         variables.s .= -variables.s
@@ -112,19 +114,22 @@ function kkt_solve_initial_point!(
 
         # solve with [-q;0] as a RHS to get z initializer
         # zero out any sparse cone variables at end
-        @. kktsystem.workx = -data.q_gpu
+        @. kktsystem.workx = -data.q
         kktsystem.workz .=  zero(T)
+        CUDA.synchronize()
 
         kktsolver_setrhs!(kktsystem.kktsolver, kktsystem.workx, kktsystem.workz)
         is_success = kktsolver_solve!(kktsystem.kktsolver, nothing, variables.z)
     else
         # QP initialization
-        @. kktsystem.workx = -data.q_gpu
-        @. kktsystem.workz = data.b_gpu
+        @. kktsystem.workx = -data.q
+        @. kktsystem.workz = data.b
+        CUDA.synchronize()
 
         kktsolver_setrhs!(kktsystem.kktsolver, kktsystem.workx, kktsystem.workz)
         is_success = kktsolver_solve!(kktsystem.kktsolver, variables.x, variables.z)
         @. variables.s = -variables.z
+        CUDA.synchronize()
     end
 
     return is_success
@@ -135,7 +140,7 @@ function kkt_solve!(
     kktsystem::DefaultKKTSystemGPU{T},
     lhs::DefaultVariables{T},
     rhs::DefaultVariables{T},
-    data::DefaultProblemData{T},
+    data::DefaultProblemDataGPU{T},
     variables::DefaultVariables{T},
     cones::CompositeConeGPU{T},
     steptype::Symbol   #:affine or :combined
@@ -179,18 +184,18 @@ function kkt_solve!(
     CUDA.synchronize()
 
     workx2 = kktsystem.workx2
-    mul!(workx2,data.P_gpu,x1)
-    tau_num = rhs.τ - rhs.κ/variables.τ + dot(data.q_gpu,x1) + dot(data.b_gpu,z1) + 2*dot(ξ,workx2)
+    mul!(workx2,data.P,x1)
+    tau_num = rhs.τ - rhs.κ/variables.τ + dot(data.q,x1) + dot(data.b,z1) + 2*dot(ξ,workx2)
 
     #offset ξ for the quadratic form in the denominator
     ξ_minus_x2    = ξ   #alias to ξ, same as workx
     @. ξ_minus_x2  -= x2
     CUDA.synchronize()
 
-    tau_den  = variables.κ/variables.τ - dot(data.q_gpu,x2) - dot(data.b_gpu,z2)
-    mul!(workx2,data.P_gpu,ξ_minus_x2)
+    tau_den  = variables.κ/variables.τ - dot(data.q,x2) - dot(data.b,z2)
+    mul!(workx2,data.P,ξ_minus_x2)
     t1 = dot(ξ_minus_x2,workx2)
-    mul!(workx2,data.P_gpu,x2)
+    mul!(workx2,data.P,x2)
     t2 = dot(x2,workx2)
     tau_den += t1 - t2
 

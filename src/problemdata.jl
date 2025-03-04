@@ -29,18 +29,6 @@ function DefaultProblemData{T}(
 		(A, b, cones) = (A_new, b_new, cones_new)
 	end
 
-	use_gpu = settings.direct_solve_method in gpu_solver_list ? true : false
-	# Preprocess large second-order cones
-	if use_gpu
-		size_soc = SOC_NO_EXPANSION_MAX_SIZE
-		num_socs, last_sizes, soc_indices, soc_starts = expand_soc(cones,size_soc)
-
-		if (length(num_socs) > 0)
-			P_new,q_new,A_new,b_new,cones_new =  augment_A_b_soc(cones,P,q,A,b,size_soc,num_socs, last_sizes, soc_indices, soc_starts)
-			(P, q, A, b, cones) = (P_new, q_new, A_new, b_new, cones_new)
-		end
-	end
-
 	# chordal decomposition : return nothing if disabled or no decomp
 	# --------------------------------------
 	chordal_info = try_chordal_info(A,b,cones,settings)
@@ -60,9 +48,6 @@ function DefaultProblemData{T}(
 	b_new = copy_if_nothing(b_new,b)
 	cones_new = copy_if_nothing(cones_new,cones)
 
-	#GPU requires a full P
-	P_new = (settings.direct_solve_method in gpu_solver_list) ? SparseMatrixCSC(Symmetric(triu(P_new))) : triu(P_new);
-
 	#cap entries in b at INFINITY.  This is important 
 	#for inf values that were not in a reduced cone
 	#this is not considered part of the "presolve", so
@@ -72,27 +57,94 @@ function DefaultProblemData{T}(
 	#this ensures m is the *reduced* size m
 	(m,n) = size(A_new)
 
-	equilibration = DefaultEquilibration{T}(n,m,use_gpu)
+	equilibration = DefaultEquilibration{T}(n,m,false)
 
 	normq = norm(q_new, Inf)
 	normb = norm(b_new, Inf)
-
-	P_gpu = nothing
-	q_gpu = nothing
-	A_gpu = nothing
-	At_gpu = nothing
-	b_gpu = nothing
 
 
 	DefaultProblemData{T}(
 		P_new,q_new,A_new,b_new,cones_new,
 		n,m,equilibration,normq,normb,
-		presolver,chordal_info,
-		P_gpu,q_gpu,A_gpu,At_gpu,b_gpu)
+		presolver,chordal_info)
 
 end
 
-function data_get_normq!(data::DefaultProblemData{T}) where {T}
+function DefaultProblemDataGPU{T}(
+	P::AbstractSparseMatrix{T},
+	q::AbstractVector{T},
+	A::AbstractSparseMatrix{T},
+	b::AbstractVector{T},
+	cones::Vector{SupportedCone},
+	settings::Settings{T}
+) where {T}
+
+	# some caution is required to ensure we take a minimal,
+	# but nonzero, number of data copies during presolve steps 
+	P_new, q_new, A_new, b_new, cones_new = 
+		(nothing,nothing,nothing,nothing,nothing)
+
+	# YC: no presolve for GPU implemenation
+	# presolve : return nothing if disabled or no reduction
+	# --------------------------------------
+	presolver = nothing
+
+	# if !isnothing(presolver)
+	# 	(A_new, b_new, cones_new) = presolve(presolver, A, b, cones)
+	# 	(A, b, cones) = (A_new, b_new, cones_new)
+	# end
+
+	# YC: no chordal decomposition for GPU implemenation
+	# chordal decomposition : return nothing if disabled or no decomp
+	# --------------------------------------
+	chordal_info = nothing
+
+	@assert(settings.direct_solve_method in gpu_solver_list)
+
+	# # Preprocess large second-order cones
+	# size_soc = SOC_NO_EXPANSION_MAX_SIZE
+	# num_socs, last_sizes, soc_indices, soc_starts = expand_soc(cones,size_soc)
+
+	# if (length(num_socs) > 0)
+	# 	P_new,q_new,A_new,b_new,cones_new =  augment_A_b_soc(cones,P,q,A,b,size_soc,num_socs, last_sizes, soc_indices, soc_starts)
+	# 	(P, q, A, b, cones) = (P_new, q_new, A_new, b_new, cones_new)
+	# end
+
+	# now make sure we have a clean copy of everything if we
+	#haven't made one already.   Necessary since we will scale
+	# scale the internal copy and don't want to step on the user
+	copy_if_nothing(x,y) = isnothing(x) ? deepcopy(y) : x
+	P_new = copy_if_nothing(P_new,P)
+	q_new = copy_if_nothing(q_new,q)
+	A_new = copy_if_nothing(A_new,A)
+	b_new = copy_if_nothing(b_new,b)
+	cones_new = copy_if_nothing(cones_new,cones)
+
+	At_new = CuSparseMatrixCSR(A_new')
+
+	#cap entries in b at INFINITY.  This is important 
+	#for inf values that were not in a reduced cone
+	#this is not considered part of the "presolve", so
+	#can always happen regardless of user settings 
+	maxval = T(Clarabel.get_infinity())
+	CUDA.@sync @. b_new = min(b_new, maxval)
+	
+	#this ensures m is the *reduced* size m
+	(m,n) = size(A_new)
+
+	equilibration = DefaultEquilibration{T}(n,m,true)
+
+	normq = norm(q_new, Inf)
+	normb = norm(b_new, Inf)
+
+	DefaultProblemDataGPU{T}(
+		P_new,q_new,A_new,At_new,b_new,cones_new,
+		n,m,equilibration,normq,normb,
+		presolver,chordal_info)
+
+end
+
+function data_get_normq!(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
 
 	if isnothing(data.normq)
 		# recover unscaled norm
@@ -102,7 +154,7 @@ function data_get_normq!(data::DefaultProblemData{T}) where {T}
 	return data.normq
 end 
 
-function data_get_normb!(data::DefaultProblemData{T}) where {T}
+function data_get_normb!(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
 
 	if isnothing(data.normb)
 		# recover unscaled norm
@@ -112,11 +164,11 @@ function data_get_normb!(data::DefaultProblemData{T}) where {T}
 	return data.normb
 end 
 
-function data_clear_normq!(data::DefaultProblemData{T}) where {T}
+function data_clear_normq!(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
 		data.normq = nothing
 end 
 
-function data_clear_normb!(data::DefaultProblemData{T}) where {T}
+function data_clear_normb!(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
 		data.normb = nothing
 end 
 
@@ -212,7 +264,7 @@ function data_equilibrate!(
 end
 
 function data_equilibrate!(
-	data::DefaultProblemData{T},
+	data::DefaultProblemDataGPU{T},
 	cones::CompositeConeGPU{T},
 	settings::Settings{T}
 ) where {T}
@@ -235,7 +287,7 @@ function data_equilibrate!(
 
 	#references to problem data
 	#note that P may be triu, but it shouldn't matter
-	(P, A, At, q, b) = (data.P_gpu, data.A_gpu, data.At_gpu, data.q_gpu, data.b_gpu)
+	(P, A, At, q, b) = (data.P, data.A, data.At, data.q, data.b)
 
 	scale_min = settings.equilibrate_min_scaling
 	scale_max = settings.equilibrate_max_scaling

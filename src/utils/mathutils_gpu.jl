@@ -67,7 +67,7 @@ function _kernel_rectify_equilibration!(
 ) where {T}
 
     row_norms_gpu!(norm_LHS, P)   # P is a full CSR matrix on GPU
-	row_norms_no_reset!(norm_LHS, At)       #incrementally from P norms
+	row_norms_no_reset_gpu!(norm_LHS, At)       #incrementally from P norms
 	row_norms_gpu!(norm_RHS, A)                      #A is a CSR matrix on GPU
 
 	return nothing
@@ -96,10 +96,10 @@ function _kernel_row_norms!(
 ) where{T <: AbstractFloat}
 
     fill!(norms, zero(T))
-    return row_norms_no_reset!(norms,A)
+    return row_norms_no_reset_gpu!(norms,A)
 end
 
-@inline function row_norms_no_reset!(
+@inline function row_norms_no_reset_gpu!(
     norms::AbstractVector{T},
 	A::AbstractSparseMatrix{T};
 	reset::Bool = true
@@ -407,4 +407,11 @@ end
 
     CUDA.@sync kernel(A, n; threads, blocks)
     
+end
+
+function norm_scaled_gpu(m::AbstractVector{T},v::AbstractVector{T},work::AbstractVector{T}) where{T}
+    CUDA.@sync @. work = m*v
+    CUDA.@sync @. work = work*work
+    t = sum(work)
+    return sqrt(t)
 end

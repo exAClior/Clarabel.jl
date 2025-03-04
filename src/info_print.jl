@@ -52,7 +52,7 @@ function info_print_configuration(
     io::IO,
     info::DefaultInfo{T},
     settings::Settings{T},
-    data::DefaultProblemData{T},
+    data::DefaultProblemDataGPU{T},
     cones::CompositeConeGPU{T}
 ) where {T}
 
@@ -62,9 +62,9 @@ function info_print_configuration(
         @printf(io, "\npresolve: removed %i constraints\n", count_reduced(data.presolver))
     end 
 
-    if(!isnothing(data.chordal_info))
-        print_chordal_decomposition(io, data.chordal_info, settings)
-    end
+    # if(!isnothing(data.chordal_info))
+    #     print_chordal_decomposition(io, data.chordal_info, settings)
+    # end
 
     @printf(io, "\nproblem:\n")
     @printf(io, "  variables     = %i\n", data.n)

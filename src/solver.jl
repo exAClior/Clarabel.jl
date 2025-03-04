@@ -96,22 +96,20 @@ function setup!(
 
         #GPU preprocess
         s.use_gpu = gpu_preprocess(s.settings)
-        use_full = s.use_gpu      #default gpu mapping type
 
         # user facing results go here  
         s.solution = DefaultSolution{T}(A.n,A.m,s.use_gpu)
 
+        if s.use_gpu
+            P,q,A,b = gpu_data_copy!(P,q,A,b)
+        end
         # presolve / chordal decomposition if needed,
         # then take an internal copy of the problem data
         @timeit s.timers "presolve" begin
-            s.data = DefaultProblemData{T}(P,q,A,b,cones,s.settings)
+            s.data = s.use_gpu ? DefaultProblemDataGPU{T}(P,q,A,b,cones,s.settings) : DefaultProblemData{T}(P,q,A,b,cones,s.settings)
         end 
-
-        if s.use_gpu
-            gpu_data_copy!(s.data)  #YC: copy data to GPU, should be optimized later
-        end
         
-        s.cones  = s.use_gpu ? CompositeConeGPU{T}(s.data.cones) : CompositeCone{T}(s.data.cones,use_full)
+        s.cones  = s.use_gpu ? CompositeConeGPU{T}(s.data.cones) : CompositeCone{T}(s.data.cones)
 
         s.data.m == s.cones.numel || throw(DimensionMismatch())
 
@@ -188,8 +186,6 @@ function solve!(
 
     #select functions depending on devices
     use_gpu = s.use_gpu
-    residual_update = use_gpu ? residuals_update_gpu! : residuals_update!
-    info_update     = use_gpu ? info_update_gpu! : info_update!
 
     # solver release info, solver config
     # problem dimensions, cone type etc
@@ -219,7 +215,7 @@ function solve!(
 
             #update the residuals
             #--------------
-            @timeit s.timers "residual update" residual_update(s.residuals,s.variables,s.data)
+            @timeit s.timers "residual update" residuals_update!(s.residuals,s.variables,s.data)
 
             #calculate duality gap (scaled)
             #--------------
@@ -232,7 +228,7 @@ function solve!(
             #convergence check and printing
             #--------------
 
-            @timeit s.timers "info update" info_update(
+            @timeit s.timers "info update" info_update!(
                 s.info,s.data,s.variables,
                 s.residuals,s.kktsystem,s.settings,s.timers
             )
@@ -362,7 +358,7 @@ function solve!(
     @timeit s.timers "post-process" begin
         #check for "almost" convergence checks and then extract solution
         info_post_process!(s.info,s.residuals,s.settings) 
-        solution_post_process!(s.solution,s.data,s.variables,s.info,s.settings,use_gpu)
+        solution_post_process!(s.solution,s.data,s.variables,s.info,s.settings)
     end 
     
     #halt timers
@@ -569,10 +565,16 @@ function gpu_preprocess(
 end
 
 #copy data from CPU to GPU
-function gpu_data_copy!(data::DefaultProblemData{T}) where{T}
-    data.P_gpu = CuSparseMatrixCSR(data.P)
-    data.q_gpu = unsafe_wrap(CuArray{T,1},data.q)
-    data.A_gpu = CuSparseMatrixCSR(data.A)
-    data.At_gpu = CuSparseMatrixCSR(data.A')
-    data.b_gpu = unsafe_wrap(CuArray{T,1},data.b)
+function gpu_data_copy!(
+    P::AbstractMatrix{T},
+    q::AbstractVector{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T}
+) where{T}
+    # make a copy if the input matrix is upper triangular istriu is very fast
+	if !istriu(P)
+		P_new = triu(P)  #copies 
+		P = P_new 	     #rust borrow
+	end 
+    return (CuSparseMatrixCSR(SparseMatrixCSC(Symmetric(P))), CuVector(q), CuSparseMatrixCSR(A), CuVector(b))
 end

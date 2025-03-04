@@ -442,13 +442,3 @@ function cholesky_3x3_explicit_solve_2!(x,L,b)
     x[3] = c3/L[3,3]
 
 end
-
-#######################################################
-# Special GPU operations
-#######################################################
-function norm_scaled_gpu(m::AbstractVector{T},v::AbstractVector{T},work::AbstractVector{T}) where{T}
-    CUDA.@sync @. work = m*v
-    CUDA.@sync @. work = work*work
-    t = sum(work)
-    return sqrt(t)
-end
