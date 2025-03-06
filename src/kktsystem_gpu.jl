@@ -226,19 +226,27 @@ function kkt_solve!(
 
 end
 
-# #update the KKT system with new P and A
-# function kkt_update_P!(
-#     kktsystem::DefaultKKTSystemGPU{T},
-#     P::SparseMatrixCSC{T}
-# ) where{T}
-#     kktsolver_update_P!(kktsystem.kktsolver,P)
-#     return nothing
-# end
+#update the KKT system with new P and A, At
+function kkt_update_P!(
+    kktsystem::DefaultKKTSystemGPU{T},
+    P::CuSparseMatrix{T}
+) where{T}
+    kktsolver_update_P!(kktsystem.kktsolver,P)
+    return nothing
+end
 
-# function kkt_update_A!(
-#     kktsystem::DefaultKKTSystemGPU{T},
-#     A::SparseMatrixCSC{T}
-# ) where{T}
-#     kktsolver_update_A!(kktsystem.kktsolver,A)
-#     return nothing
-# end
+function kkt_update_A!(
+    kktsystem::DefaultKKTSystemGPU{T},
+    A::CuSparseMatrix{T}
+) where{T}
+    kktsolver_update_A!(kktsystem.kktsolver,A)
+    return nothing
+end
+
+function kkt_update_At!(
+    kktsystem::DefaultKKTSystemGPU{T},
+    At::CuSparseMatrix{T}
+) where{T}
+    kktsolver_update_At!(kktsystem.kktsolver,At)
+    return nothing
+end

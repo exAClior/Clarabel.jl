@@ -409,9 +409,23 @@ end
     
 end
 
-function norm_scaled_gpu(m::AbstractVector{T},v::AbstractVector{T},work::AbstractVector{T}) where{T}
+function norm_scaled_gpu(m::CuVector{T},v::CuVector{T},work::CuVector{T}) where{T}
     CUDA.@sync @. work = m*v
     CUDA.@sync @. work = work*work
     t = sum(work)
     return sqrt(t)
+end
+
+#inf-norm of the product a.*b
+function norm_inf_scaled_gpu(m::CuVector{T},v::CuVector{T},work::CuVector{T}) where{T}
+    fill!(work,zero(T))
+    CUDA.@sync @. work = max(work,abs(m*v))
+
+    return maximum(work)
+end
+
+function isequal_sparsity(A::CuSparseMatrix, B::CuSparseMatrix)
+	return size(A) == size(B) &&
+        isequal(A.rowPtr, B.rowPtr) &&
+        isequal(A.colVal, B.colVal)
 end

@@ -144,7 +144,7 @@ function DefaultProblemDataGPU{T}(
 
 end
 
-function data_get_normq!(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
+function data_get_normq!(data::DefaultProblemData{T}) where {T}
 
 	if isnothing(data.normq)
 		# recover unscaled norm
@@ -154,12 +154,32 @@ function data_get_normq!(data::Union{DefaultProblemData{T},DefaultProblemDataGPU
 	return data.normq
 end 
 
-function data_get_normb!(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
+function data_get_normq!(data::DefaultProblemDataGPU{T}, work::CuVector{T}) where {T}
+
+	if isnothing(data.normq)
+		# recover unscaled norm
+		dinv = data.equilibration.dinv
+		data.normq = norm_inf_scaled_gpu(data.q, dinv, work)
+	end
+	return data.normq
+end 
+
+function data_get_normb!(data::DefaultProblemData{T}) where {T}
 
 	if isnothing(data.normb)
 		# recover unscaled norm
 		einv = data.equilibration.einv
 		data.normb = norm_inf_scaled(data.b,einv)
+	end
+	return data.normb
+end 
+
+function data_get_normb!(data::DefaultProblemDataGPU{T}, work::CuVector{T}) where {T}
+
+	if isnothing(data.normb)
+		# recover unscaled norm
+		einv = data.equilibration.einv
+		data.normb = norm_inf_scaled_gpu(data.b, einv, work)
 	end
 	return data.normb
 end 

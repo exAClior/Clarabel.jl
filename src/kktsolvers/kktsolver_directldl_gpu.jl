@@ -291,6 +291,28 @@ function kktsolver_solve!(
     return is_success
 end
 
+# update methods for P and A 
+function kktsolver_update_P!(
+    kktsolver::GPULDLKKTSolver{T},
+    P::CuSparseMatrix{T}
+) where{T}
+    _update_values!(kktsolver.GPUsolver,kktsolver.KKT,kktsolver.map.P,P.nzVal)
+end
+
+function kktsolver_update_A!(
+    kktsolver::GPULDLKKTSolver{T},
+    A::CuSparseMatrix{T}
+) where{T}
+    _update_values!(kktsolver.GPUsolver,kktsolver.KKT,kktsolver.map.A,A.nzVal)
+end
+
+function kktsolver_update_At!(
+    kktsolver::GPULDLKKTSolver{T},
+    At::CuSparseMatrix{T}
+) where{T}
+    _update_values!(kktsolver.GPUsolver,kktsolver.KKT,kktsolver.map.At,At.nzVal)
+end
+
 function  _iterative_refinement(
     kktsolver::GPULDLKKTSolver{T},
     GPUsolver::AbstractGPUSolver{T}

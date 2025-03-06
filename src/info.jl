@@ -82,8 +82,8 @@ function info_update!(
     τinv = inv(variables.τ)
 
     #unscaled linear term norms
-    normb = data_get_normb!(data)
-    normq = data_get_normq!(data)
+    normb = data_get_normb!(data, worksz)
+    normq = data_get_normq!(data, workx)
 
     #shortcuts for the equilibration matrices
     dinv = data.equilibration.dinv

@@ -39,6 +39,21 @@ function update_data!(
     return nothing
 end 
 
+function update_data!(
+    s::Solver{T},
+    P::CuSparseMatrix{T} ,
+    q::CuVector{T},
+    A::CuSparseMatrix{T},
+    b::CuVector{T} 
+) where{T}
+
+    update_P!(s,P)
+    update_q!(s,q)
+    update_A!(s,A)
+    update_b!(s,b)
+
+    return nothing
+end 
 
 """
 	update_P!(solver,P)
@@ -62,6 +77,25 @@ function update_P!(
     _check_update_allowed(s)
     d = s.data.equilibration.d
     _update_matrix(data,s.data.P,d,d)
+    # overwrite KKT data 
+    kkt_update_P!(s.kktsystem,s.data.P)
+
+    return nothing
+end 
+
+function update_P!(
+    s::Solver{T},
+    P::CuSparseMatrix{T} 
+) where{T}
+
+    #YC: Internal issymmetric() function returns a wrong solution for CuMatrices.
+    #    We rely on users to guarantee that the input P matrix is positive semidefinite.
+    isnothing(P) && return
+    !(length(P.nzVal) == length(s.data.P.nzVal)) && error("The dimension of P is incorrect! It should be a full sparse matrix.")
+
+    _check_update_allowed(s)
+    d = s.data.equilibration.d
+    _update_matrix(P,s.data.P,d,d)
     # overwrite KKT data 
     kkt_update_P!(s.kktsystem,s.data.P)
 
@@ -94,6 +128,27 @@ function update_A!(
     _update_matrix(data,s.data.A,e,d)
     # overwrite KKT data 
     kkt_update_A!(s.kktsystem,s.data.A)
+
+    return nothing
+end 
+
+function update_A!(
+    s::Solver{T},
+    A::CuSparseMatrix{T} 
+) where{T}
+
+    isnothing(A) && return
+    _check_update_allowed(s)
+    d = s.data.equilibration.d
+    e = s.data.equilibration.e 
+    _update_matrix(A,s.data.A,e,d)
+    At = CuSparseMatrixCSR(s.data.A')
+    CUDA.@sync @. s.data.At.nzVal = At.nzVal
+
+    # overwrite KKT data 
+    kkt_update_A!(s.kktsystem,s.data.A)
+    kkt_update_At!(s.kktsystem,s.data.At)
+    At = nothing
 
     return nothing
 end 
@@ -203,6 +258,29 @@ function _update_matrix(
     end
 end
 
+function _update_matrix(
+    data::CuSparseMatrix{T},
+    M::CuSparseMatrix{T},
+    lscale::CuVector{T},
+    rscale::CuVector{T}
+) where{T}
+    
+    isequal_sparsity(data,M) || throw(DimensionMismatch("Input must match sparsity pattern of original data."))
+    _update_matrix(data.nzVal,M,lscale,rscale)
+end
+
+function _update_matrix(
+    data::CuVector{T},
+    M::CuSparseMatrix{T},
+    lscale::CuVector{T},
+    rscale::CuVector{T}
+) where{T}
+    
+    length(data) == 0 && return
+    length(data) == nnz(M) || throw(DimensionMismatch("Input must match length of original data."))
+    CUDA.@sync @. M.nzVal = data
+    lrscale_gpu!(lscale,M,rscale)
+end
 
 function _update_vector(
     data::AbstractVector{T},
@@ -227,5 +305,17 @@ function _update_vector(
     end
 end
 
+#Update for GPU vectors
+function _update_vector(
+    data::CuVector{T},
+    v::CuVector{T},
+    scale::CuVector{T}
+) where{T}
+
+    length(data) == 0 && return
+    length(data) == length(v) || throw(DimensionMismatch("Input must match length of original data."))
+    
+    CUDA.@sync @. v= data*scale
+end
 
 
