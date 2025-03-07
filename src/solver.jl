@@ -95,26 +95,26 @@ function setup!(
     @timeit s.timers "setup!" begin
 
         #GPU preprocess
-        s.use_gpu = gpu_preprocess(s.settings)
+        use_gpu = gpu_preprocess(s.settings)
 
         # user facing results go here  
-        s.solution = DefaultSolution{T}(A.n,A.m,s.use_gpu)
+        s.solution = DefaultSolution{T}(A.n,A.m,use_gpu)
 
-        if s.use_gpu
+        if use_gpu
             P,q,A,b = gpu_data_copy!(P,q,A,b)
         end
         # presolve / chordal decomposition if needed,
         # then take an internal copy of the problem data
         @timeit s.timers "presolve" begin
-            s.data = s.use_gpu ? DefaultProblemDataGPU{T}(P,q,A,b,cones,s.settings) : DefaultProblemData{T}(P,q,A,b,cones,s.settings)
+            s.data = use_gpu ? DefaultProblemDataGPU{T}(P,q,A,b,cones,s.settings) : DefaultProblemData{T}(P,q,A,b,cones,s.settings)
         end 
         
-        s.cones  = s.use_gpu ? CompositeConeGPU{T}(s.data.cones) : CompositeCone{T}(s.data.cones)
+        s.cones  = use_gpu ? CompositeConeGPU{T}(s.data.cones) : CompositeCone{T}(s.data.cones)
 
         s.data.m == s.cones.numel || throw(DimensionMismatch())
 
-        s.variables = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
-        s.residuals = DefaultResiduals{T}(s.data.n,s.data.m,s.use_gpu)
+        s.variables = DefaultVariables{T}(s.data.n,s.data.m,use_gpu)
+        s.residuals = DefaultResiduals{T}(s.data.n,s.data.m,use_gpu)
 
         #equilibrate problem data immediately on setup.
         #this prevents multiple equlibrations if solve!
@@ -124,16 +124,16 @@ function setup!(
         end
       
         @timeit s.timers "kkt init" begin
-            DefaultKKTsys = s.use_gpu ? DefaultKKTSystemGPU : DefaultKKTSystem
+            DefaultKKTsys = use_gpu ? DefaultKKTSystemGPU : DefaultKKTSystem
             s.kktsystem = DefaultKKTsys{T}(s.data,s.cones,s.settings)
         end
 
         # work variables for assembling step direction LHS/RHS
-        s.step_rhs  = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
-        s.step_lhs  = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
+        s.step_rhs  = DefaultVariables{T}(s.data.n,s.data.m,use_gpu)
+        s.step_lhs  = DefaultVariables{T}(s.data.n,s.data.m,use_gpu)
 
         # a saved copy of the previous iterate
-        s.prev_vars = DefaultVariables{T}(s.data.n,s.data.m,s.use_gpu)
+        s.prev_vars = DefaultVariables{T}(s.data.n,s.data.m,use_gpu)
 
     end
 
@@ -183,9 +183,6 @@ function solve!(
     σ = one(T) 
     α = zero(T)
     μ = typemax(T)
-
-    #select functions depending on devices
-    use_gpu = s.use_gpu
 
     # solver release info, solver config
     # problem dimensions, cone type etc
@@ -237,7 +234,7 @@ function solve!(
 
             # check for termination due to slow progress and update strategy
             if isdone
-                (action,scaling) = _strategy_checkpoint_insufficient_progress(s,scaling,use_gpu) 
+                (action,scaling) = _strategy_checkpoint_insufficient_progress(s,scaling) 
                 if     action ∈ [NoUpdate,Fail]; break;
                 elseif action === Update; continue; 
                 end
@@ -290,7 +287,7 @@ function solve!(
 
                 #calculate step length and centering parameter
                 #--------------
-                @timeit s.timers "affine step size" α = solver_get_step_length(s,:affine,scaling,use_gpu)
+                @timeit s.timers "affine step size" α = solver_get_step_length(s,:affine,scaling)
                 σ = _calc_centering_parameter(α)
 
                 #make a reduced Mehrotra correction in the first iteration
@@ -325,7 +322,7 @@ function solve!(
 
             #compute final step length and update the current iterate
             #--------------
-            @timeit s.timers "combined step size" α = solver_get_step_length(s,:combined,scaling,use_gpu)
+            @timeit s.timers "combined step size" α = solver_get_step_length(s,:combined,scaling)
 
             # check for undersized step and update strategy
             (action,scaling) = _strategy_checkpoint_small_step(s, α, scaling)
@@ -335,10 +332,9 @@ function solve!(
             end 
 
             # Copy previous iterate in case the next one is a dud
-            info_save_prev_iterate(s.info,s.variables,s.prev_vars,use_gpu)
+            info_save_prev_iterate(s.info,s.variables,s.prev_vars)
 
-            # @timeit s.timers "final update" variables_add_step!(s.variables,s.step_lhs,α)
-            @timeit s.timers "final update" variables_add_step!(s.variables,s.step_lhs,α,use_gpu)
+            @timeit s.timers "final update" variables_add_step!(s.variables,s.step_lhs,α)
 
         end  #end while
         #----------
@@ -396,7 +392,7 @@ function solver_default_start!(s::Solver{T}) where {T}
 end
 
 
-function solver_get_step_length(s::Solver{T},steptype::Symbol,scaling::ScalingStrategy,use_gpu::Bool) where{T}
+function solver_get_step_length(s::Solver{T},steptype::Symbol,scaling::ScalingStrategy) where{T}
 
     # step length to stay within the cones
     α = variables_calc_step_length(
@@ -468,7 +464,7 @@ end
 
 
 
-function _strategy_checkpoint_insufficient_progress(s::Solver{T},scaling::ScalingStrategy,use_gpu::Bool) where {T} 
+function _strategy_checkpoint_insufficient_progress(s::Solver{T},scaling::ScalingStrategy) where {T} 
 
     if s.info.status != INSUFFICIENT_PROGRESS
         # there is no problem, so nothing to do
@@ -476,7 +472,7 @@ function _strategy_checkpoint_insufficient_progress(s::Solver{T},scaling::Scalin
     else 
         #recover old iterate since "insufficient progress" often 
         #involves actual degradation of results 
-        info_reset_to_prev_iterate(s.info,s.variables,s.prev_vars,use_gpu)
+        info_reset_to_prev_iterate(s.info,s.variables,s.prev_vars)
 
         # If problem is asymmetric, we can try to continue with the dual-only strategy
         if !is_symmetric(s.cones) && (scaling == PrimalDual::ScalingStrategy)
