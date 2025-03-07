@@ -124,16 +124,13 @@ function shadow_centrality_check(
     return centrality
 end
 
-function variables_copy_from(dest::DefaultVariables{T},src::DefaultVariables{T},use_gpu::Bool) where {T}
-    dest.x .= src.x
-    dest.s .= src.s
-    dest.z .= src.z
+function variables_copy_from(dest::DefaultVariables{T},src::DefaultVariables{T}) where {T}
+    copyto!(dest.x, src.x)
+    copyto!(dest.s, src.s)
+    copyto!(dest.z, src.z)
     dest.τ  = src.τ
     dest.κ  = src.κ
 
-    if use_gpu
-        CUDA.synchronize()
-    end
 end 
 
 function variables_scale_cones!(
@@ -148,18 +145,14 @@ end
 
 function variables_add_step!(
     variables::DefaultVariables{T},
-    step::DefaultVariables{T}, α::T, use_gpu::Bool
+    step::DefaultVariables{T}, α::T
 ) where {T}
 
-    @. variables.x += α*step.x
-    @. variables.s += α*step.s
-    @. variables.z += α*step.z
+    axpy!(α, step.x, variables.x)
+    axpy!(α, step.s, variables.s)
+    axpy!(α, step.z, variables.z)
     variables.τ    += α*step.τ
     variables.κ    += α*step.κ
-
-    if use_gpu 
-        CUDA.synchronize()
-    end
 
     return nothing
 end

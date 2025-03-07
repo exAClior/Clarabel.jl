@@ -193,8 +193,7 @@ end
 function info_save_prev_iterate(
     info::DefaultInfo{T},
     variables::DefaultVariables{T},
-    prev_variables::DefaultVariables{T},
-    use_gpu::Bool
+    prev_variables::DefaultVariables{T}
 ) where {T}
 
     info.prev_cost_primal = info.cost_primal
@@ -204,14 +203,13 @@ function info_save_prev_iterate(
     info.prev_gap_abs     = info.gap_abs
     info.prev_gap_rel     = info.gap_rel
 
-    variables_copy_from(prev_variables,variables,use_gpu);
+    variables_copy_from(prev_variables,variables);
 end
 
 function info_reset_to_prev_iterate(
     info::DefaultInfo{T},
     variables::DefaultVariables{T},
-    prev_variables::DefaultVariables{T},
-    use_gpu::Bool
+    prev_variables::DefaultVariables{T}
 ) where {T}
 
     info.cost_primal = info.prev_cost_primal
@@ -221,7 +219,7 @@ function info_reset_to_prev_iterate(
     info.gap_abs     = info.prev_gap_abs
     info.gap_rel     = info.prev_gap_rel
 
-    variables_copy_from(variables,prev_variables,use_gpu);
+    variables_copy_from(variables,prev_variables);
 end
 
 function info_save_scalars(

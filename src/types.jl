@@ -348,7 +348,6 @@ mutable struct Solver{T <: AbstractFloat} <: AbstractSolver{T}
     step_rhs::Option{AbstractVariables{T}}
     prev_vars::Option{AbstractVariables{T}}
     solution::Option{AbstractSolution{T}}
-    use_gpu::Union{Bool,Nothing}
     settings::Settings{T}
     timers::TimerOutput
 
