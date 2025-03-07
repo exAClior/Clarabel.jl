@@ -91,12 +91,11 @@ end
 # return μH*(z) for exponential cone
 function get_Hs!(
     K::ExponentialCone{T},
-    Hsblock::AbstractVector{T},
-    is_triangular::Bool
+    Hsblock::AbstractVector{T}
 ) where {T}
 
     # stores triu(K.Hs) into a vector
-    is_triangular ? pack_triu(Hsblock,K.Hs) : pack_all(Hsblock,K.Hs) 
+    pack_triu(Hsblock,K.Hs)
 
 end
 

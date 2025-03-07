@@ -90,8 +90,7 @@ end
 # return μH*(z) for generalized power cone
 function get_Hs!(
     K::GenPowerCone{T},
-    Hsblock::AbstractVector{T},
-    is_triangular::Bool
+    Hsblock::AbstractVector{T}
 ) where {T}
 
     #NB: we are returning here the diagonal D = [d1; d2] block from the

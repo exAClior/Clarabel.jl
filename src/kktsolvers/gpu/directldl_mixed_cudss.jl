@@ -2,7 +2,7 @@ using CUDA, CUDA.CUSPARSE
 using CUDSS
 
 export CUDSSDirectLDLSolverMixed
-struct CUDSSDirectLDLSolverMixed{T} <: AbstractGPUSolver{T}
+struct CUDSSDirectLDLSolverMixed{T} <: AbstractDirectLDLSolver{T}
 
     KKT::AbstractSparseMatrix{T}
     cudssSolver::CUDSS.CudssSolver{Float32}
@@ -35,8 +35,8 @@ struct CUDSSDirectLDLSolverMixed{T} <: AbstractGPUSolver{T}
 
 end
 
-GPUSolversDict[:cudssmixed] = CUDSSDirectLDLSolverMixed
-required_matrix_shape(::Type{CUDSSDirectLDLSolverMixed}) = :full
+ldlsolver_constructor(::Val{:cudssmixed}) = CUDSSDirectLDLSolverMixed
+ldlsolver_matrix_shape(::Val{CUDSSDirectLDLSolverMixed}) = :full
 
 #refactor the linear system
 function refactor!(ldlsolver::CUDSSDirectLDLSolverMixed{T}) where{T}

@@ -90,8 +90,7 @@ end
 
 function get_Hs!(
     K::ZeroCone{T},
-    Hsblock::AbstractVector{T},
-    is_triangular::Bool
+    Hsblock::AbstractVector{T}
 ) where {T}
 
     #expecting only a diagonal here, and

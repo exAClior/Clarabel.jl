@@ -19,24 +19,24 @@ function info_update!(
     #shortcuts for the equilibration matrices
     d = data.equilibration.d; dinv = data.equilibration.dinv
     e = data.equilibration.e; einv = data.equilibration.einv
-    cscale = data.equilibration.c[]
+    cinv = inv(data.equilibration.c[])
 
     #primal and dual costs. dot products are invariant w.r.t
     #equilibration, but we still need to back out the overall
     #objective scaling term c
     xPx_τinvsq_over2 = residuals.dot_xPx * τinv * τinv / 2;
-    info.cost_primal =  (+residuals.dot_qx*τinv + xPx_τinvsq_over2)/cscale
-    info.cost_dual   =  (-residuals.dot_bz*τinv - xPx_τinvsq_over2)/cscale
+    info.cost_primal =  (+residuals.dot_qx*τinv + xPx_τinvsq_over2) * cinv
+    info.cost_dual   =  (-residuals.dot_bz*τinv - xPx_τinvsq_over2) * cinv
 
     #variables norms, undoing the equilibration.  Do not unscale
     #by τ yet because the infeasibility residuals are ratios of 
     #terms that have no affine parts anyway
-    normx = norm_scaled(dinv,variables.x)
-    normz = norm_scaled(einv,variables.z)
+    normx = norm_scaled(d,variables.x)
+    normz = norm_scaled(e,variables.z) * cinv
     norms = norm_scaled(einv,variables.s)
 
     #primal and dual infeasibility residuals.   
-    info.res_primal_inf = norm_scaled(dinv,residuals.rx_inf) / max(one(T), normz)
+    info.res_primal_inf = (norm_scaled(dinv,residuals.rx_inf) * cinv) / max(one(T), normz)
     info.res_dual_inf   = max(
         norm_scaled(dinv,residuals.Px) / max(one(T), normx),
         norm_scaled(einv,residuals.rz_inf) / max(one(T), normx + norms)
@@ -49,14 +49,14 @@ function info_update!(
 
     #primal and dual relative residuals.  
     info.res_primal  = norm_scaled(einv,residuals.rz) * τinv / max(one(T), normb + normx + norms)
-    info.res_dual    = norm_scaled(dinv,residuals.rx) * τinv / max(one(T), normq + normx + normz)
+    info.res_dual    = norm_scaled(dinv,residuals.rx) * τinv * cinv / max(one(T), normq + normx + normz)
 
     #absolute and relative gaps
     info.gap_abs = abs(info.cost_primal - info.cost_dual)
     info.gap_rel = info.gap_abs / max(one(T),min(abs(info.cost_primal),abs(info.cost_dual)))
 
-    #κ/τ
-    info.ktratio = variables.κ / variables.τ
+    #κ/τ ratio (scaled)
+    info.ktratio = variables.κ * τinv
 
     #solve time so far (includes setup!)
     info_get_solve_time!(info,timers)
@@ -86,26 +86,26 @@ function info_update!(
     normq = data_get_normq!(data, workx)
 
     #shortcuts for the equilibration matrices
-    dinv = data.equilibration.dinv
-    einv = data.equilibration.einv
-    cscale = data.equilibration.c[]
+    d = data.equilibration.d; dinv = data.equilibration.dinv
+    e = data.equilibration.e; einv = data.equilibration.einv
+    cinv = inv(data.equilibration.c[])
 
     #primal and dual costs. dot products are invariant w.r.t
     #equilibration, but we still need to back out the overall
     #objective scaling term c
     xPx_τinvsq_over2 = residuals.dot_xPx * τinv * τinv / 2;
-    info.cost_primal =  (+residuals.dot_qx*τinv + xPx_τinvsq_over2)/cscale
-    info.cost_dual   =  (-residuals.dot_bz*τinv - xPx_τinvsq_over2)/cscale
+    info.cost_primal =  (+residuals.dot_qx*τinv + xPx_τinvsq_over2) * cinv
+    info.cost_dual   =  (-residuals.dot_bz*τinv - xPx_τinvsq_over2) * cinv
 
     #variables norms, undoing the equilibration.  Do not unscale
     #by τ yet because the infeasibility residuals are ratios of 
     #terms that have no affine parts anyway
-    normx = norm_scaled_gpu(dinv,variables.x,workx)
-    normz = norm_scaled_gpu(einv,variables.z,worksz)
+    normx = norm_scaled_gpu(d,variables.x,workx)
+    normz = norm_scaled_gpu(e,variables.z,worksz) * cinv
     norms = norm_scaled_gpu(einv,variables.s,worksz)
 
     #primal and dual infeasibility residuals.   
-    info.res_primal_inf = norm_scaled_gpu(dinv,residuals.rx_inf,workx) / max(one(T), normz)
+    info.res_primal_inf = (norm_scaled_gpu(dinv,residuals.rx_inf,workx)  * cinv) / max(one(T), normz)
     info.res_dual_inf   = max(
         norm_scaled_gpu(dinv,residuals.Px,workx) / max(one(T), normx),
         norm_scaled_gpu(einv,residuals.rz_inf,worksz) / max(one(T), normx + norms)
@@ -118,7 +118,7 @@ function info_update!(
 
     #primal and dual relative residuals.  
     info.res_primal  = norm_scaled_gpu(einv,residuals.rz,worksz) * τinv / max(one(T), normb + normx + norms)
-    info.res_dual    = norm_scaled_gpu(dinv,residuals.rx,workx) * τinv / max(one(T), normq + normx + normz)
+    info.res_dual    = norm_scaled_gpu(dinv,residuals.rx,workx) * τinv * cinv/ max(one(T), normq + normx + normz)
 
     #absolute and relative gaps
     info.gap_abs = abs(info.cost_primal - info.cost_dual)
@@ -161,13 +161,15 @@ function info_check_termination!(
         end
 
         # Going backwards. Stop immediately if residuals diverge out of feasibility tolerance.
-        if ( info.res_dual > settings.tol_feas && 
-             info.res_dual > 100*info.prev_res_dual
-           ) || 
-           ( info.res_primal > settings.tol_feas && 
-             info.res_primal > 100*info.prev_res_primal
-           )
-             info.status = INSUFFICIENT_PROGRESS
+        if info.ktratio < one(T)
+            if ( info.res_dual > 100*settings.tol_feas && 
+                info.res_dual > 100*info.prev_res_dual
+              ) || 
+              ( info.res_primal > 100*settings.tol_feas && 
+                info.res_primal > 100*info.prev_res_primal
+              )
+                info.status = INSUFFICIENT_PROGRESS
+            end
         end
     end
 

@@ -38,7 +38,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
     settings::Settings{T}
 
     #the direct linear LDL solver
-    GPUsolver::AbstractGPUSolver{T}
+    GPUsolver::AbstractDirectLDLSolver{T}
 
     #the diagonal regularizer currently applied
     diagonal_regularizer::T
@@ -55,7 +55,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
         # get a constructor for the LDL solver we should use,
         # and also the matrix shape it requires
-        (kktshape, GPUsolverT) = _get_GPUsolver_config(settings)
+        (kktshape, GPUsolverT) = get_ldlsolver_config(settings)
 
         #construct a KKT matrix of the right shape
         KKT, map = _assemble_full_kkt_matrix(P,A,At,cones)
@@ -95,32 +95,11 @@ end
 
 GPULDLKKTSolver(args...) = GPULDLKKTSolver{DefaultFloat}(args...)
 
-function _get_GPUsolver_type(s::Symbol)
-    try
-        return GPUSolversDict[s]
-    catch
-        throw(error("Unsupported gpu linear solver :", s))
-    end
-end
-
-function _get_GPUsolver_config(settings::Settings)
-
-    #which LDL solver should I use?
-    GPUsolverT = _get_GPUsolver_type(settings.direct_solve_method)
-
-    #does it want a :full KKT matrix?
-    kktshape = required_matrix_shape(GPUsolverT)
-    @assert(kktshape == :full)
-
-    (kktshape,GPUsolverT)
-end 
-
-
 #update entries in the kktsolver object using the
 #given index into its CSC representation
 function _update_values!(
-    GPUsolver::AbstractGPUSolver{T},
-    KKT::AbstractSparseMatrix{T},
+    GPUsolver::AbstractDirectLDLSolver{T},
+    KKT::CuSparseMatrix{T},
     index::AbstractVector{Ti},
     values::AbstractVector{T}
 ) where{T,Ti}
@@ -158,7 +137,7 @@ end
 
 function _kktsolver_update_inner!(
     kktsolver:: GPULDLKKTSolver{T},
-    GPUsolver::AbstractGPUSolver{T},
+    GPUsolver::AbstractDirectLDLSolver{T},
     cones::CompositeConeGPU{T}
 ) where {T}
 
@@ -169,7 +148,6 @@ function _kktsolver_update_inner!(
     KKT       = kktsolver.KKT
 
     #Set the elements the W^tW blocks in the KKT matrix.
-    # get_Hs!(cones,kktsolver.Hsblockscpu,false)
     get_Hs!(cones,kktsolver.Hsblocks)
 
     @. kktsolver.Hsblocks *= -one(T)
@@ -181,7 +159,7 @@ end
 
 function _kktsolver_regularize_and_refactor!(
     kktsolver::GPULDLKKTSolver{T},
-    GPUsolver::AbstractGPUSolver{T}
+    GPUsolver::AbstractDirectLDLSolver{T}
 ) where{T}
 
     settings      = kktsolver.settings
@@ -315,7 +293,7 @@ end
 
 function  _iterative_refinement(
     kktsolver::GPULDLKKTSolver{T},
-    GPUsolver::AbstractGPUSolver{T}
+    GPUsolver::AbstractDirectLDLSolver{T}
 ) where{T}
 
     (x,b)   = (kktsolver.x,kktsolver.b)

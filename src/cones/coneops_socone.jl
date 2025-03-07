@@ -155,8 +155,7 @@ end
 
 function get_Hs!(
     K::SecondOrderCone{T},
-    Hsblock::AbstractVector{T},
-    is_triangular::Bool
+    Hsblock::AbstractVector{T}
 ) where {T}
 
     if is_sparse_expandable(K)
@@ -170,34 +169,21 @@ function get_Hs!(
         #for dense form, we return H = \eta^2 (2*ww^T - J), where 
         #J = diag(1,-I).  We are packing into dense triu form
 
-        if is_triangular
-            #YC: we are assuming data is upper triangular, should also consider the lower triangular case
-            Hsblock[1] = 2*K.w[1]^2 - one(T)
-            hidx = 2
+        # 2*w[1]^2 - 1., avoiding bad cancellations
+        Hsblock[1] = (sqrt(2)*K.w[1] - one(T))*(sqrt(2)*K.w[1] + one(T))
 
-            @inbounds for col in 2:K.dim
-                wcol = K.w[col]
-                @inbounds for row in 1:col 
-                    Hsblock[hidx] = 2*K.w[row]*wcol
-                    hidx += 1
-                end 
-                #go back to add the offset term from J 
-                Hsblock[hidx-1] += one(T)
-            end
-        else
-            hidx = 1
-            @inbounds for col in 1:K.dim
-                wcol = K.w[col]
-                @inbounds for row in 1:K.dim
-                    Hsblock[hidx] = 2*K.w[row]*wcol
-                    hidx += 1
-                end 
-            end
-            Hsblock[1] -= one(T)
-            @inbounds for ind in 2:K.dim
-                Hsblock[(ind-1)*K.dim + ind] += one(T)
-            end
+        hidx = 2
+
+        @inbounds for col in 2:K.dim
+            wcol = K.w[col]
+            @inbounds for row in 1:col 
+                Hsblock[hidx] = 2*K.w[row]*wcol
+                hidx += 1
+            end 
+            #go back to add the offset term from J 
+            Hsblock[hidx-1] += one(T)
         end
+
         Hsblock .*= K.η^2
     end
 
@@ -432,7 +418,8 @@ end
 
 @inline function _soc_residual(z:: AbstractVector{T}) where {T} 
 
-    @views z[1]*z[1] - sumsq(z[2:end])
+    z1norm = norm(@view z[2:end])
+    return (z[1] - z1norm)*(z[1] + z1norm)
 end 
 
 @inline function _sqrt_soc_residual(z:: AbstractVector{T}) where {T} 
@@ -450,8 +437,9 @@ end
 ) where {T} 
     
     x0 = z[1] + α * dz[1];
-    @views x1_sq = dot_shifted(z[2:end],z[2:end],dz[2:end],dz[2:end],α)
-    res = x0*x0 - x1_sq
+    @views x1sq = dot_shifted(z[2:end],z[2:end],dz[2:end],dz[2:end],α)
+    x1norm = sqrt(x1sq)
+    res = (x0 - x1norm) * (x0 + x1norm)
     return res
 end 
 
@@ -462,6 +450,12 @@ function _step_length_soc_component(
     y::AbstractVector{T},
     αmax::T
 ) where {T}
+
+    # upper bound the step length by the maximum allowable
+    # step length for the scalar part of the cone    
+    if x[1] >= 0 && y[1] < 0
+        αmax = min(αmax,-x[1]/y[1])
+    end
 
     # assume that x is in the SOC, and find the minimum positive root
     # of the quadratic equation:  ||x₁+αy₁||^2 = (x₀ + αy₀)^2

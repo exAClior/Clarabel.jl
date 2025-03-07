@@ -122,12 +122,11 @@ end
 # The Hs block for each cone.
 function get_Hs!(
     cones::CompositeCone{T},
-    Hsblock::Vector{T},
-    is_triangular::Bool
+    Hsblock::Vector{T}
 ) where {T}
 
     for (cone, rng) in zip(cones,cones.rng_blocks)
-        @conedispatch get_Hs!(cone,view(Hsblock,rng),is_triangular)
+        @conedispatch get_Hs!(cone,view(Hsblock,rng))
     end
     return nothing
 end

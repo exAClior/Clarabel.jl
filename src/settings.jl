@@ -25,8 +25,8 @@ __Reduced Accuracy Settings__||
 reduced\\_tol\\_gap\\_abs               | 5e-5      | reduced absolute duality gap tolerance
 reduced\\_tol\\_gap\\_rel               | 5e-5      | reduced relative duality gap tolerance
 reduced\\_tol\\_feas                    | 1e-4      | reduced feasibility check tolerance (primal and dual)
-reduced\\_tol\\_infeas_abs		        | 5e-5      | reduced absolute infeasibility tolerance (primal and dual)
-reduced\\_tol\\_infeas_rel		        | 5e-5      | reduced relative infeasibility tolerance (primal and dual)
+reduced\\_tol\\_infeas\\_abs		    | 5e-12     | reduced absolute infeasibility tolerance (primal and dual)
+reduced\\_tol\\_infeas\\_rel		    | 5e-5      | reduced relative infeasibility tolerance (primal and dual)
 reduced\\_tol\\_ktratio                 | 1e-4      | reduced κ/τ tolerance
 ||
 __Data Equilibration Settings__||
@@ -41,6 +41,7 @@ min\\_switch\\_step\\_length            | 1e-1      | minimum step size allowed 
 min\\_terminate\\_step\\_length         | 1e-4      | minimum step size allowed for symmetric cones & asymmetric cones with Dual scaling
 ||
 __Linear Solver Settings__||
+max\\_threads                           | 0         | max threads for multithreaded solvers (choose 0 for automatic)
 direct\\_kkt\\_solver                   | true      | use a direct linear solver method (required true)
 direct\\_solve\\_method                 | :qdldl    | direct linear solver (e.g. :qdldl, :mkl, :panua, :ma57, :cholmod, :faer)
 ||                                                    Also, there are two GPU solver options (e.g. :cudss, :cudssmixed)
@@ -82,10 +83,14 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     tol_ktratio::T          = 1e-6
 
     # reduced accuracy solution tolerances
+    # NB: reduced_tol_infeas_abs is *smaller* when relaxed, since 
+    # we are checking that we are this far into the interior of 
+    # an inequality when checking.   Smaller for this value means 
+    # "less margin required"
     reduced_tol_gap_abs::T          = 5e-5
     reduced_tol_gap_rel::T          = 5e-5
     reduced_tol_feas::T             = 1e-4
-    reduced_tol_infeas_abs::T		= 5e-5
+    reduced_tol_infeas_abs::T		= 5e-12
 	reduced_tol_infeas_rel::T		= 5e-5
     reduced_tol_ktratio::T          = 1e-4
 
@@ -99,6 +104,10 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     linesearch_backtrack_step::T        = 0.8     
     min_switch_step_length::T           = 1e-2   
     min_terminate_step_length::T        = 1e-4    
+
+    #maximum solver threads for multithreaded KKT solvers 
+    #choosing 0 lets the solver choose for itself
+    max_threads::UInt32    	            = 0
 
     #the direct linear solver package to use
     direct_kkt_solver::Bool             = true   #indirect not yet supported

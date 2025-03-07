@@ -849,7 +849,7 @@ end
 
 @inline function _soc_residual_gpu(z::AbstractVector{T}) where {T} 
     res = z[1]*z[1]
-    for j in 2:length(z)
+    @inbounds for j in 2:length(z)
         res -= z[j]*z[j]
     end
     
@@ -865,7 +865,7 @@ end
 
 @inline function _dot_xy_gpu(x::AbstractVector{T},y::AbstractVector{T},rng::UnitRange) where {T} 
     val = zero(T)
-    for j in rng
+    @inbounds for j in rng
         val += x[j]*y[j]
     end
     
@@ -891,6 +891,10 @@ end
     y::AbstractVector{T},
     αmax::T
 ) where {T}
+
+    if x[1] >= 0 && y[1] < 0
+        αmax = min(αmax,-x[1]/y[1])
+    end
 
     # assume that x is in the SOC, and find the minimum positive root
     # of the quadratic equation:  ||x₁+αy₁||^2 = (x₀ + αy₀)^2
