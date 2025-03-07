@@ -13,21 +13,21 @@ end
 
 struct GPUDataMap
 
-    P::AbstractVector{Cint}
-    A::AbstractVector{Cint}
-    At::AbstractVector{Cint}        #YC: not sure whether we need it or not
-    Hsblocks::AbstractVector{Cint}                #indices of the lower RHS blocks (by cone)
+    P::CuVector{Cint}
+    A::CuVector{Cint}
+    At::CuVector{Cint}        #YC: not sure whether we need it or not
+    Hsblocks::CuVector{Cint}                #indices of the lower RHS blocks (by cone)
 
     #all of above terms should be disjoint and their union
     #should cover all of the user data in the KKT matrix.  Now
     #we make two last redundant indices that will tell us where
     #the whole diagonal is, including structural zeros.
-    diagP::AbstractVector{Cint}
-    diag_full::AbstractVector{Cint}
+    diagP::CuVector{Cint}
+    diag_full::CuVector{Cint}
 
     function GPUDataMap(
-        Pmat::AbstractSparseMatrix{T},
-        Amat::AbstractSparseMatrix{T},
+        Pmat::CuSparseMatrix{T},
+        Amat::CuSparseMatrix{T},
         cones::CompositeConeGPU{T}
         ) where{T}
 
@@ -53,9 +53,9 @@ struct GPUDataMap
 end
 
 function _assemble_full_kkt_matrix(
-    P::AbstractSparseMatrix{T},
-    A::AbstractSparseMatrix{T},
-    At::AbstractSparseMatrix{T},
+    P::CuSparseMatrix{T},
+    A::CuSparseMatrix{T},
+    At::CuSparseMatrix{T},
     cones::CompositeConeGPU{T}
 ) where{T}
     map   = GPUDataMap(P,A,cones)
@@ -88,11 +88,11 @@ function _assemble_full_kkt_matrix(
 end
 
 function _full_kkt_assemble_colcounts_gpu(
-    rowptr::AbstractVector{Cint}, 
-    P::AbstractSparseMatrix{T},
-    P_zero::AbstractVector{Cint},
-    A::AbstractSparseMatrix{T},
-    At::AbstractSparseMatrix{T},
+    rowptr::CuVector{Cint}, 
+    P::CuSparseMatrix{T},
+    P_zero::CuVector{Cint},
+    A::CuSparseMatrix{T},
+    At::CuSparseMatrix{T},
     cones::CompositeConeGPU{T}
 ) where{T}
 
@@ -136,13 +136,13 @@ end
 
 
 function _full_kkt_assemble_fill_gpu(
-    rowptr::AbstractVector{Cint}, 
-    colval::AbstractVector{Cint},
-    nzval::AbstractVector{T},
-    P::AbstractSparseMatrix{T},
-    P_zero::AbstractVector{Cint},
-    A::AbstractSparseMatrix{T},
-    At::AbstractSparseMatrix{T},
+    rowptr::CuVector{Cint}, 
+    colval::CuVector{Cint},
+    nzval::CuVector{T},
+    P::CuSparseMatrix{T},
+    P_zero::CuVector{Cint},
+    A::CuSparseMatrix{T},
+    At::CuSparseMatrix{T},
     cones::CompositeConeGPU{T},
     map::GPUDataMap
 ) where{T}

@@ -4,15 +4,15 @@ using CUDSS
 export CUDSSDirectLDLSolverMixed
 struct CUDSSDirectLDLSolverMixed{T} <: AbstractDirectLDLSolver{T}
 
-    KKT::AbstractSparseMatrix{T}
+    KKT::CuSparseMatrix{T}
     cudssSolver::CUDSS.CudssSolver{Float32}
 
-    KKTFloat32::AbstractSparseMatrix{Float32}
-    xFloat32::AbstractVector{Float32}
-    bFloat32::AbstractVector{Float32}
+    KKTFloat32::CuSparseMatrix{Float32}
+    xFloat32::CuVector{Float32}
+    bFloat32::CuVector{Float32}
     
 
-    function CUDSSDirectLDLSolverMixed{T}(KKT::AbstractSparseMatrix{T},x,b) where {T}
+    function CUDSSDirectLDLSolverMixed{T}(KKT::CuSparseMatrix{T},x,b) where {T}
 
         dim = LinearAlgebra.checksquare(KKT)
 
@@ -59,8 +59,8 @@ end
 #solve the linear system
 function solve!(
     ldlsolver::CUDSSDirectLDLSolverMixed{T},
-    x::AbstractVector{T},
-    b::AbstractVector{T}
+    x::CuVector{T},
+    b::CuVector{T}
 ) where{T}
 
     xFloat32 = ldlsolver.xFloat32

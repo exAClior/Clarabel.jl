@@ -8,20 +8,20 @@ mutable struct DefaultKKTSystemGPU{T} <: AbstractKKTSystem{T}
     kktsolver::AbstractKKTSolver{T}
 
     #solution vector for constant part of KKT solves
-    x1::AbstractVector{T}
-    z1::AbstractVector{T}
+    x1::CuVector{T}
+    z1::CuVector{T}
 
     #solution vector for general KKT solves
-    x2::AbstractVector{T}
-    z2::AbstractVector{T}
+    x2::CuVector{T}
+    z2::CuVector{T}
     
     #work vectors for assembling/disassembling vectors
-    workx::AbstractVector{T}
-    workz::AbstractVector{T}
-    work_conic::AbstractVector{T}
+    workx::CuVector{T}
+    workz::CuVector{T}
+    work_conic::CuVector{T}
 
     #temporary GPU vector for the conic part 
-    workx2::AbstractVector{T}
+    workx2::CuVector{T}
 
         function DefaultKKTSystemGPU{T}(
             data::DefaultProblemDataGPU{T},

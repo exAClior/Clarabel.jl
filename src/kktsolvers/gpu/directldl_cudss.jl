@@ -4,13 +4,13 @@ using CUDSS
 export CUDSSDirectLDLSolver
 struct CUDSSDirectLDLSolver{T} <: AbstractDirectLDLSolver{T}
 
-    KKT::AbstractSparseMatrix{T}
+    KKT::CuSparseMatrix{T}
     cudssSolver::CUDSS.CudssSolver{T}
-    x::AbstractVector{T}
-    b::AbstractVector{T}
+    x::CuVector{T}
+    b::CuVector{T}
     
 
-    function CUDSSDirectLDLSolver{T}(KKT::AbstractSparseMatrix{T},x,b) where {T}
+    function CUDSSDirectLDLSolver{T}(KKT::CuSparseMatrix{T},x,b) where {T}
 
         LinearAlgebra.checksquare(KKT)
 
@@ -49,8 +49,8 @@ end
 #solve the linear system
 function solve!(
     ldlsolver::CUDSSDirectLDLSolver{T},
-    x::AbstractVector{T},
-    b::AbstractVector{T}
+    x::CuVector{T},
+    b::CuVector{T}
 ) where{T}
     
     #solve on GPU

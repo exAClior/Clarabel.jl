@@ -15,8 +15,8 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     degree::Cint
 
     #range views
-    rng_cones::AbstractVector{UnitRange{Cint}}
-    rng_blocks::AbstractVector{UnitRange{Cint}}
+    rng_cones::CuVector{UnitRange{Cint}}
+    rng_blocks::CuVector{UnitRange{Cint}}
 
     # the flag for symmetric cone check
     _is_symmetric::Bool
@@ -31,35 +31,35 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     idx_inq::Vector{Cint}
 
     #data
-    w::AbstractVector{T}
-    λ::AbstractVector{T}
-    η::AbstractVector{T}
+    w::CuVector{T}
+    λ::CuVector{T}
+    η::CuVector{T}
 
     #nonsymmetric cone
-    αp::AbstractVector{T}           #power parameters of power cones
-    H_dual::AbstractArray{T}        #Hessian of the dual barrier at z 
-    Hs::AbstractArray{T}            #scaling matrix
-    grad::AbstractArray{T}         #gradient of the dual barrier at z 
+    αp::CuVector{T}           #power parameters of power cones
+    H_dual::CuArray{T,3}            #Hessian of the dual barrier at z 
+    Hs::CuArray{T,3}                #scaling matrix
+    grad::CuMatrix{T}               #gradient of the dual barrier at z 
 
     #PSD cone
     psd_dim::Cint                  #We only support PSD cones with the same small dimension
-    chol1::AbstractArray{T,3}
-    chol2::AbstractArray{T,3}
-    SVD::AbstractArray{T,3}
-    λpsd::AbstractMatrix{T}
-    Λisqrt::AbstractMatrix{T}
-    R::AbstractArray{T,3}
-    Rinv::AbstractArray{T,3}
-    Hspsd::AbstractArray{T,3}
+    chol1::CuArray{T,3}
+    chol2::CuArray{T,3}
+    SVD::CuArray{T,3}
+    λpsd::CuMatrix{T}
+    Λisqrt::CuMatrix{T}
+    R::CuArray{T,3}
+    Rinv::CuArray{T,3}
+    Hspsd::CuArray{T,3}
 
     #workspace for various internal uses
-    workmat1::AbstractArray{T,3}
-    workmat2::AbstractArray{T,3}
-    workmat3::AbstractArray{T,3}
-    workvec::AbstractVector{T}
+    workmat1::CuArray{T,3}
+    workmat2::CuArray{T,3}
+    workmat3::CuArray{T,3}
+    workvec::CuVector{T}
 
     #step_size
-    α::AbstractVector{T}
+    α::CuVector{T}
 
     function CompositeConeGPU{T}(cone_specs::Vector{SupportedCone}) where {T}
 

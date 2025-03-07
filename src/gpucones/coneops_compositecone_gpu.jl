@@ -20,8 +20,8 @@ end
 
 function rectify_equilibration!(
     cones::CompositeConeGPU{T},
-     δ::AbstractVector{T},
-     e::AbstractVector{T}
+     δ::CuVector{T},
+     e::CuVector{T}
 ) where{T}
 
     n_linear = cones.n_linear
@@ -49,7 +49,7 @@ end
 
 function margins(
     cones::CompositeConeGPU{T},
-    z::AbstractVector{T},
+    z::CuVector{T},
     pd::PrimalOrDualCone,
 ) where {T}
     αmin = typemax(T)
@@ -88,7 +88,7 @@ end
 
 function scaled_unit_shift!(
     cones::CompositeConeGPU{T},
-    z::AbstractVector{T},
+    z::CuVector{T},
     α::T,
     pd::PrimalOrDualCone
 ) where {T}
@@ -122,8 +122,8 @@ end
 # unit initialization for asymmetric solves
 function unit_initialization!(
     cones::CompositeConeGPU{T},
-    z::AbstractVector{T},
-    s::AbstractVector{T}
+    z::CuVector{T},
+    s::CuVector{T}
 ) where {T}
 
     n_linear = cones.n_linear
@@ -197,8 +197,8 @@ end
 
 function update_scaling!(
     cones::CompositeConeGPU{T},
-    s::AbstractVector{T},
-    z::AbstractVector{T},
+    s::CuVector{T},
+    z::CuVector{T},
 	μ::T,
     scaling_strategy::ScalingStrategy
 ) where {T}
@@ -246,7 +246,7 @@ end
 # Update Hs block for each cone.
 function get_Hs!(
     cones::CompositeConeGPU{T},
-    Hsblocks::AbstractVector{T}
+    Hsblocks::CuVector{T}
 ) where {T}
 
     n_linear = cones.n_linear
@@ -296,9 +296,9 @@ end
 
 function mul_Hs!(
     cones::CompositeConeGPU{T},
-    y::AbstractVector{T},
-    x::AbstractVector{T},
-    work::AbstractVector{T}
+    y::CuVector{T},
+    x::CuVector{T},
+    work::CuVector{T}
 ) where {T}
 
     n_linear = cones.n_linear
@@ -341,8 +341,8 @@ end
 # x = λ ∘ λ for symmetric cone and x = s for asymmetric cones
 function affine_ds!(
     cones::CompositeConeGPU{T},
-    ds::AbstractVector{T},
-    s::AbstractVector{T}
+    ds::CuVector{T},
+    s::CuVector{T}
 ) where {T}
 
     n_linear = cones.n_linear
@@ -383,10 +383,10 @@ end
 
 function combined_ds_shift!(
     cones::CompositeConeGPU{T},
-    shift::AbstractVector{T},
-    step_z::AbstractVector{T},
-    step_s::AbstractVector{T},
-    z::AbstractVector{T},
+    shift::CuVector{T},
+    step_z::CuVector{T},
+    step_s::CuVector{T},
+    z::CuVector{T},
     σμ::T
 ) where {T}
 
@@ -436,10 +436,10 @@ end
 
 function Δs_from_Δz_offset!(
     cones::CompositeConeGPU{T},
-    out::AbstractVector{T},
-    ds::AbstractVector{T},
-    work::AbstractVector{T},
-    z::AbstractVector{T}
+    out::CuVector{T},
+    ds::CuVector{T},
+    work::CuVector{T},
+    z::CuVector{T}
 ) where {T}
 
     n_linear = cones.n_linear
@@ -480,10 +480,10 @@ end
 # maximum allowed step length over all cones
 function step_length(
      cones::CompositeConeGPU{T},
-        dz::AbstractVector{T},
-        ds::AbstractVector{T},
-         z::AbstractVector{T},
-         s::AbstractVector{T},
+        dz::CuVector{T},
+        ds::CuVector{T},
+         z::CuVector{T},
+         s::CuVector{T},
   settings::Settings{T},
       αmax::T,
 ) where {T}
@@ -553,10 +553,10 @@ end
 # compute the total barrier function at the point (z + α⋅dz, s + α⋅ds)
 function compute_barrier(
     cones::CompositeConeGPU{T},
-    z::AbstractVector{T},
-    s::AbstractVector{T},
-    dz::AbstractVector{T},
-    ds::AbstractVector{T},
+    z::CuVector{T},
+    s::CuVector{T},
+    dz::CuVector{T},
+    ds::CuVector{T},
     α::T
 ) where {T}
 

@@ -2,7 +2,7 @@
 # KKTSolver using cudss direct solvers
 # -------------------------------------
 
-const CuVectorView{T} = SubArray{T, 1, AbstractVector{T}, Tuple{AbstractVector{Int}}, false}
+const CuVectorView{T} = SubArray{T, 1, CuVector{T}, Tuple{CuVector{Int}}, false}
 ##############################################################
 # YC: Some functions are repeated as in the direct solver, which are better to be removed
 ##############################################################
@@ -12,26 +12,26 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
     m::Int; n::Int
 
     # Left and right hand sides for solves
-    x::AbstractVector{T}
-    b::AbstractVector{T}
+    x::CuVector{T}
+    b::CuVector{T}
 
     # internal workspace for IR scheme
     # and static offsetting of KKT
-    work1::AbstractVector{T}
-    work2::AbstractVector{T}
+    work1::CuVector{T}
+    work2::CuVector{T}
 
     #KKT mapping from problem data to KKT
     map::GPUDataMap 
 
     #the expected signs of D in KKT = LDL^T
-    Dsigns::AbstractVector{Cint}
+    Dsigns::CuVector{Cint}
 
     # a vector for storing the Hs blocks
     # on the in the KKT matrix block diagonal
-    Hsblocks::AbstractVector{T}
+    Hsblocks::CuVector{T}
 
     #unpermuted KKT matrix
-    KKT::AbstractCuSparseMatrix{T}
+    KKT::CuSparseMatrix{T}
 
     #settings just points back to the main solver settings.
     #Required since there is no separate LDL settings container
@@ -44,9 +44,9 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
     diagonal_regularizer::T
 
     function GPULDLKKTSolver{T}(
-        P::AbstractCuSparseMatrix{T},
-        A::AbstractCuSparseMatrix{T},
-        At::AbstractCuSparseMatrix{T},
+        P::CuSparseMatrix{T},
+        A::CuSparseMatrix{T},
+        At::CuSparseMatrix{T},
         cones::CompositeConeGPU{T},
         m::Int64,
         n::Int64,
@@ -100,8 +100,8 @@ GPULDLKKTSolver(args...) = GPULDLKKTSolver{DefaultFloat}(args...)
 function _update_values!(
     GPUsolver::AbstractDirectLDLSolver{T},
     KKT::CuSparseMatrix{T},
-    index::AbstractVector{Ti},
-    values::AbstractVector{T}
+    index::CuVector{Ti},
+    values::CuVector{T}
 ) where{T,Ti}
 
     #Update values in the KKT matrix K
@@ -111,9 +111,9 @@ end
 
 #updates KKT matrix values
 function _update_diag_values_KKT!(
-    KKT::AbstractCuSparseMatrix{T},
-    index::AbstractVector{Ti},
-    values::AbstractVector{T}
+    KKT::CuSparseMatrix{T},
+    index::CuVector{Ti},
+    values::CuVector{T}
 ) where{T,Ti}
 
     #Update values in the KKT matrix K
@@ -208,8 +208,8 @@ end
 
 function kktsolver_setrhs!(
     kktsolver::GPULDLKKTSolver{T},
-    rhsx::AbstractVector{T},
-    rhsz::AbstractVector{T}
+    rhsx::CuVector{T},
+    rhsz::CuVector{T}
 ) where {T}
 
     b = kktsolver.b
@@ -226,8 +226,8 @@ end
 
 function kktsolver_getlhs!(
     kktsolver::GPULDLKKTSolver{T},
-    lhsx::Union{Nothing,AbstractVector{T}},
-    lhsz::Union{Nothing,AbstractVector{T}}
+    lhsx::Union{Nothing,CuVector{T}},
+    lhsz::Union{Nothing,CuVector{T}}
 ) where {T}
 
     x = kktsolver.x
@@ -244,8 +244,8 @@ end
 
 function kktsolver_solve!(
     kktsolver::GPULDLKKTSolver{T},
-    lhsx::Union{Nothing,AbstractVector{T}},
-    lhsz::Union{Nothing,AbstractVector{T}}
+    lhsx::Union{Nothing,CuVector{T}},
+    lhsz::Union{Nothing,CuVector{T}}
 ) where {T}
 
     (x,b) = (kktsolver.x,kktsolver.b)
@@ -356,10 +356,10 @@ end
 # # and returning its norm
 
 function _get_refine_error!(
-    e::AbstractVector{T},
-    b::AbstractVector{T},
-    KKT::AbstractCuSparseMatrix{T},
-    ξ::AbstractVector{T}) where {T}
+    e::CuVector{T},
+    b::CuVector{T},
+    KKT::CuSparseMatrix{T},
+    ξ::CuVector{T}) where {T}
 
     
     mul!(e,KKT,ξ)    # e = b - Kξ
