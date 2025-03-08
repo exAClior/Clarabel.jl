@@ -142,9 +142,6 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
 
     #centrality check
     neighborhood                        = 1e-6
-
-    # device: can be :cpu or :gpu
-    device::Symbol                      = :cpu
 end
 
 Settings(args...) = Settings{DefaultFloat}(args...)
