@@ -418,7 +418,7 @@ function solver_backtrack_step_to_barrier(
     step = s.settings.linesearch_backtrack_step
     α = αinit
 
-    for j = 1:1
+    for j = 1:50
         barrier = variables_barrier(s.variables,s.step_lhs,α,s.cones)
         if barrier < one(T)
             return α

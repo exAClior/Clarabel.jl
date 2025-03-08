@@ -165,8 +165,8 @@ function variables_affine_step_rhs!(
     cones::Union{CompositeCone{T},CompositeConeGPU{T}}
 ) where{T}
 
-    @. d.x    .=  r.rx
-    @. d.z     =  r.rz
+    copyto!(d.x, r.rx)
+    copyto!(d.z, r.rz)
     affine_ds!(cones, d.s, variables.s)    # asymmetric cones need value of s
     d.τ        =  r.rτ
     d.κ        =  variables.τ * variables.κ
@@ -179,7 +179,7 @@ function variables_combined_step_rhs!(
     d::DefaultVariables{T},
     r::DefaultResiduals{T},
     variables::DefaultVariables{T},
-    cones::Union{CompositeCone{T},CompositeConeGPU{T}},
+    cones::CompositeCone{T},
     step::DefaultVariables{T},
     σ::T,
     μ::T,
@@ -211,6 +211,46 @@ function variables_combined_step_rhs!(
 
     # now we copy the scaled res for rz and d.z is no longer work
     @. d.z .= (1 - σ)*r.rz
+
+    return nothing
+end
+
+function variables_combined_step_rhs!(
+    d::DefaultVariables{T},
+    r::DefaultResiduals{T},
+    variables::DefaultVariables{T},
+    cones::CompositeConeGPU{T},
+    step::DefaultVariables{T},
+    σ::T,
+    μ::T,
+    m::T,
+) where {T}
+
+    dotσμ = σ*μ
+
+    CUDA.@sync @. d.x  = (one(T) - σ)*r.rx
+       d.τ  = (one(T) - σ)*r.rτ
+       d.κ  = - dotσμ + m * step.τ * step.κ + variables.τ * variables.κ
+
+    # ds is different for symmetric and asymmetric cones:
+    # Symmetric cones: d.s = λ ◦ λ + W⁻¹Δs ∘ WΔz − σμe
+    # Asymmetric cones: d.s = s + σμ*g(z)
+
+    # we want to scale the Mehotra correction in the symmetric 
+    # case by M, so just scale step_z by M.  This is an unnecessary
+    # vector operation (since it amounts to M*z'*s), but it 
+    # doesn't happen very often 
+    if (m != one(T))
+        CUDA.@sync @. step.z *= m
+    end
+
+    combined_ds_shift!(cones,d.z,step.z,step.s,variables.z,dotσμ)
+
+    #We are relying on d.s = affine_ds already here
+    CUDA.@sync @. d.s += d.z
+
+    # now we copy the scaled res for rz and d.z is no longer work
+    CUDA.@sync @. d.z = (1 - σ)*r.rz
 
     return nothing
 end
