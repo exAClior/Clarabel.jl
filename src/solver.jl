@@ -16,6 +16,59 @@ function Solver(
     return s
 end
 
+function Solver(
+    P::AbstractMatrix{T},
+    c::Vector{T},
+    A::AbstractMatrix{T},
+    b::Vector{T},
+    cones::Dict,
+    kwargs...
+) where{T <: AbstractFloat}
+    cones = cones_from_dict(cones)
+
+    s = Solver{T}()
+    setup!(s,P,c,A,b,cones,kwargs...)
+    return s
+end
+
+# given the cone-dict in scs format create an array of type Vector{SupportedCone}
+function cones_from_dict(cone::Dict)
+    # cones  = sizehint!(Clarabel.SupportedCone[],length(cone_specs))   #Efficient preallocation later on
+	cones = Vector{Clarabel.SupportedCone}(undef, 0)
+
+	haskey(cone, "f") && push!(cones, Clarabel.ZeroConeT(cone["f"]))
+	haskey(cone, "l") && push!(cones, Clarabel.NonnegativeConeT(cone["l"]))
+
+	# second-order cones
+	if haskey(cone, "q")
+		socp_dim = cone["q"]
+		for dim in socp_dim
+			push!(cones, Clarabel.SecondOrderConeT(dim))
+		end
+	end
+	# sdp triangle cones
+	if haskey(cone, "s")
+		sdp_dim = cone["s"]
+		for dim in sdp_dim
+			push!(cones, Clarabel.PSDTriangleConeT(dim))
+		end
+	end
+	# primal exponential cones
+	if haskey(cone, "ep")
+		for k = 1:cone["ep"]
+			push!(cones, Clarabel.ExponentialConeT())
+		end
+	end
+	# power cones
+	if haskey(cone, "p")
+		pow_exponents = cone["p"]
+		for exponent in pow_exponents
+            push!(cones, Clarabel.PowerConeT(exponent))
+		end
+	end
+	return cones
+end
+
 # -------------------------------------
 # setup!
 # -------------------------------------
@@ -67,6 +120,75 @@ function setup!(s,P,c,A,b,cones,settings::Settings)
 end
 
 function setup!(s,P,c,A,b,cones; kwargs...)
+    #this allows override of individual settings during setup
+    settings_populate!(s.settings, Dict(kwargs))
+    setup!(s,P,c,A,b,cones)
+end
+
+
+"""
+setup function for python wrappers
+"""
+
+function juliafy_integers(arr::Vector{T}) where {T <: Integer}
+	# 1-based indexing
+	@. arr += 1
+	# convert to 64bit
+	return Base.convert.(Int, arr)
+end
+
+function setup!(    
+    s::Solver{Tf},
+    Prowval::Vector{Ti},
+    Pcolptr::Vector{Ti},
+    Pnzval::Vector{Tf},
+    c::Vector{Tf},
+    Arowval::Vector{Ti},
+    Acolptr::Vector{Ti},
+    Anzval::Vector{Tf},
+    b::Vector{Tf},
+    cones::Dict,
+    m::Int,
+    n::Int,
+    settings::Dict
+) where {Tf <: AbstractFloat, Ti <: Integer}
+    Prowval = juliafy_integers(Prowval)
+    Arowval = juliafy_integers(Arowval)
+    Pcolptr = juliafy_integers(Pcolptr)
+    Acolptr = juliafy_integers(Acolptr)
+    cones = cones_from_dict(cones)
+    settings = Settings(settings)
+
+    P = SparseMatrixCSC(n, n, Pcolptr, Prowval, Pnzval)
+    A = SparseMatrixCSC(m, n, Acolptr, Arowval, Anzval)
+    #this allows total override of settings during setup
+    s.settings = settings
+    setup!(s,P,c,A,b,cones)
+end
+
+function setup!(
+    s::Solver{Tf},
+    Prowval::Vector{Ti},
+    Pcolptr::Vector{Ti},
+    Pnzval::Vector{Tf},
+    c::Vector{Tf},
+    Arowval::Vector{Ti},
+    Acolptr::Vector{Ti},
+    Anzval::Vector{Tf},
+    b::Vector{Tf},
+    cones::Dict,
+    m::Int,
+    n::Int;
+    kwargs...
+) where {Tf <: AbstractFloat, Ti <: Integer}
+    Prowval = juliafy_integers(Prowval)
+    Arowval = juliafy_integers(Arowval)
+    Pcolptr = juliafy_integers(Pcolptr)
+    Acolptr = juliafy_integers(Acolptr)
+    cones = cones_from_dict(cones)
+
+    P = SparseMatrixCSC(n, n, Pcolptr, Prowval, Pnzval)
+    A = SparseMatrixCSC(m, n, Acolptr, Arowval, Anzval)
     #this allows override of individual settings during setup
     settings_populate!(s.settings, Dict(kwargs))
     setup!(s,P,c,A,b,cones)

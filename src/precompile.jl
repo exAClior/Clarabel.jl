@@ -49,18 +49,8 @@ function __precompile_native()
         Clarabel.SecondOrderConeT(2),
         Clarabel.ExponentialConeT(),
         Clarabel.PowerConeT(0.5),
+        Clarabel.PSDTriangleConeT(1),
         Clarabel.GenPowerConeT([0.5;0.5],1)
-        ];
-    nvars = sum(Clarabel.nvars.(cones))
-    P = A = sparse(I(nvars)*1.)
-    b = c = ones(nvars)
-    settings = Clarabel.Settings(max_iter = 1)
-    solver   = Clarabel.Solver(P,c,A,b,cones,settings)
-    Clarabel.solve!(solver);
-
-    #separate initialization one for PSD cones as we don't support PSD and the nonsymmetric cones simultaneously at present
-    cones = [
-        Clarabel.PSDTriangleConeT(1)  
         ];
     nvars = sum(Clarabel.nvars.(cones))
     P = A = sparse(I(nvars)*1.)
@@ -175,3 +165,19 @@ function __precompile_moi()
     MOI.get(model, MOI.VariablePrimal(), x);
 end
 
+function __precompile_gpu()
+    cones = [
+        Clarabel.NonnegativeConeT(1),
+        Clarabel.ZeroConeT(1),
+        Clarabel.SecondOrderConeT(2),
+        Clarabel.ExponentialConeT(),
+        Clarabel.PowerConeT(0.5),
+        Clarabel.PSDTriangleConeT(1)  
+        ];
+    nvars = sum(Clarabel.nvars.(cones))
+    P = A = sparse(I(nvars)*1.)
+    b = c = ones(nvars)
+    settings = Clarabel.Settings(max_iter = 1, direct_solve_method = :cudss)
+    solver   = Clarabel.Solver(P,c,A,b,cones,settings)
+    Clarabel.solve!(solver);
+end

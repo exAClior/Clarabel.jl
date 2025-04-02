@@ -157,7 +157,11 @@ end
 function settings_populate!(settings::Settings, d::Dict)
     
     for (key, val) in d
-        setfield!(settings, Symbol(key), val)
+        if (key in ["direct_solve_method"; "chordal_decomposition_merge_method"]) && isa(val, String)
+			setfield!(settings, Symbol(key), Symbol(val))
+		else
+			setfield!(settings, Symbol(key), val)
+		end
     end
     return nothing
 end

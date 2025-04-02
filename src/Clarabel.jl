@@ -123,6 +123,10 @@ module Clarabel
         SnoopPrecompile.@precompile_all_calls begin
             __precompile_native()
             __precompile_moi()
+
+            if CUDA.has_cuda()
+                __precompile_gpu()
+            end
         end
     end
     __precompile_printfcns()
