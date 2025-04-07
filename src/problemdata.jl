@@ -193,11 +193,11 @@ function data_clear_normb!(data::Union{DefaultProblemData{T},DefaultProblemDataG
 		data.normb = nothing
 end 
 
-function data_is_presolved(data::DefaultProblemData{T}) where {T}
+function data_is_presolved(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
 	return !isnothing(data.presolver)
 end
 
-function data_is_chordal_decomposed(data::DefaultProblemData{T}) where {T}
+function data_is_chordal_decomposed(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
 	return !isnothing(data.chordal_info)
 end
 

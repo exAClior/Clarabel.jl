@@ -4,9 +4,9 @@
 #--------------------------------------
 function Solver(
     P::AbstractMatrix{T},
-    c::Vector{T},
+    c::AbstractVector{T},
     A::AbstractMatrix{T},
-    b::Vector{T},
+    b::AbstractVector{T},
     cones::Vector{<:SupportedCone},
     kwargs...
 ) where{T <: AbstractFloat}
@@ -18,9 +18,9 @@ end
 
 function Solver(
     P::AbstractMatrix{T},
-    c::Vector{T},
+    c::AbstractVector{T},
     A::AbstractMatrix{T},
-    b::Vector{T},
+    b::AbstractVector{T},
     cones::Dict,
     kwargs...
 ) where{T <: AbstractFloat}
@@ -125,82 +125,13 @@ function setup!(s,P,c,A,b,cones; kwargs...)
     setup!(s,P,c,A,b,cones)
 end
 
-
-"""
-setup function for python wrappers
-"""
-
-function juliafy_integers(arr::Vector{T}) where {T <: Integer}
-	# 1-based indexing
-	@. arr += 1
-	# convert to 64bit
-	return Base.convert.(Int, arr)
-end
-
-function setup!(    
-    s::Solver{Tf},
-    Prowval::Vector{Ti},
-    Pcolptr::Vector{Ti},
-    Pnzval::Vector{Tf},
-    c::Vector{Tf},
-    Arowval::Vector{Ti},
-    Acolptr::Vector{Ti},
-    Anzval::Vector{Tf},
-    b::Vector{Tf},
-    cones::Dict,
-    m::Int,
-    n::Int,
-    settings::Dict
-) where {Tf <: AbstractFloat, Ti <: Integer}
-    Prowval = juliafy_integers(Prowval)
-    Arowval = juliafy_integers(Arowval)
-    Pcolptr = juliafy_integers(Pcolptr)
-    Acolptr = juliafy_integers(Acolptr)
-    cones = cones_from_dict(cones)
-    settings = Settings(settings)
-
-    P = SparseMatrixCSC(n, n, Pcolptr, Prowval, Pnzval)
-    A = SparseMatrixCSC(m, n, Acolptr, Arowval, Anzval)
-    #this allows total override of settings during setup
-    s.settings = settings
-    setup!(s,P,c,A,b,cones)
-end
-
-function setup!(
-    s::Solver{Tf},
-    Prowval::Vector{Ti},
-    Pcolptr::Vector{Ti},
-    Pnzval::Vector{Tf},
-    c::Vector{Tf},
-    Arowval::Vector{Ti},
-    Acolptr::Vector{Ti},
-    Anzval::Vector{Tf},
-    b::Vector{Tf},
-    cones::Dict,
-    m::Int,
-    n::Int;
-    kwargs...
-) where {Tf <: AbstractFloat, Ti <: Integer}
-    Prowval = juliafy_integers(Prowval)
-    Arowval = juliafy_integers(Arowval)
-    Pcolptr = juliafy_integers(Pcolptr)
-    Acolptr = juliafy_integers(Acolptr)
-    cones = cones_from_dict(cones)
-
-    P = SparseMatrixCSC(n, n, Pcolptr, Prowval, Pnzval)
-    A = SparseMatrixCSC(m, n, Acolptr, Arowval, Anzval)
-    #this allows override of individual settings during setup
-    settings_populate!(s.settings, Dict(kwargs))
-    setup!(s,P,c,A,b,cones)
-end
-
 # main setup function
 function setup!(
     s::Solver{T},
     P::AbstractMatrix{T},
-    q::Vector{T},
+    q::AbstractVector{T},
     A::AbstractMatrix{T},
-    b::Vector{T},
+    b::AbstractVector{T},
     cones::Vector{<:SupportedCone},
 ) where{T}
 
@@ -220,7 +151,8 @@ function setup!(
         use_gpu = gpu_preprocess(s.settings)
 
         # user facing results go here  
-        s.solution = DefaultSolution{T}(A.n,A.m,use_gpu)
+        (m,n) = size(A)
+        s.solution = DefaultSolution{T}(n,m,use_gpu)
 
         if use_gpu
             P,q,A,b = gpu_data_copy!(P,q,A,b)
@@ -682,17 +614,19 @@ function gpu_preprocess(
     return (settings.direct_kkt_solver && (settings.direct_solve_method in gpu_solver_list))
 end
 
-#copy data from CPU to GPU
+#copy data from CPU to GPU, use full matrix input at the moment
 function gpu_data_copy!(
     P::AbstractMatrix{T},
     q::AbstractVector{T},
     A::AbstractMatrix{T},
     b::AbstractVector{T}
 ) where{T}
-    # make a copy if the input matrix is upper triangular istriu is very fast
-	if !istriu(P)
+    # make a copy if the input matrix is on CPU and upper triangular, istriu is very fast
+	if isa(P, SparseMatrixCSC) && !istriu(P)
 		P_new = triu(P)  #copies 
 		P = P_new 	     #rust borrow
+        P = SparseMatrixCSC(Symmetric(P))
 	end 
-    return (CuSparseMatrixCSR(SparseMatrixCSC(Symmetric(P))), CuVector(q), CuSparseMatrixCSR(A), CuVector(b))
+    # GPU input matrices are assumed to be sparse CSR
+    return (CuSparseMatrixCSR(P), CuVector(q), CuSparseMatrixCSR(A), CuVector(b))
 end

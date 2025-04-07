@@ -47,6 +47,8 @@ The set $\mathcal{K}$ is a composition of convex cones; we support zero cones (l
 - __CuClarabel.jl__ can be added via the Julia package manager (type `]`): `pkg> dev https://github.com/cvxgrp/CuClarabel.git`, (which will overwrite current use of Clarabel solver).
 
 ## Tutorial
+
+### Use in Julia
 Modeling a conic optimization problem is the same as in the original [Clarabel solver](https://clarabel.org/stable/), except with the additional parameter `direct_solve_method`. This can be set to `:cudss` or `:cudssmixed`. Here is a portfolio optimization problem modelled via JuMP:
 ```
 using LinearAlgebra, SparseArrays, Random, JuMP
@@ -83,6 +85,63 @@ set_optimizer_attribute(model, "direct_solve_method", :cudss)
 @constraint(model, [i = 1:n], x0[i] - x[i] == t[i]) 
 @constraint(model, [i = 1:n], [s[i], t[i]] in MOI.SecondOrderCone(2));
 JuMP.optimize!(model)
+```
+
+### Use in Python
+
+We can call julia code within a python file by using [JuliaCall](https://juliapy.github.io/PythonCall.jl/stable/juliacall/) package. We can download the package by
+```
+pip install juliacall
+```
+Then, we load the package as a single variable `jl` which represents the Main module in Julia, and we can write Julia code and call it via `jl.seval()` in Python. 
+```
+from juliacall import Main as jl
+import numpy as np
+# Load Clarabel in Julia
+jl.seval('using Clarabel, LinearAlgebra, SparseArrays')
+jl.seval('using CUDA, CUDA.CUSPARSE')
+```
+Here we build up a simple optimization problem with a second-order cone, which is fully written by Julia.
+```
+jl.seval('''
+    P = spzeros(3,3)
+    q = [0, -1., -1]
+    A = SparseMatrixCSC([1. 0 0; -1 0 0; 0 -1 0; 0 0 -1])
+    b = [1, 0., 0., 0.]
+
+    # 0-cone dimension 1, one second-order-cone of dimension 3
+    cones = [Clarabel.ZeroConeT(1), Clarabel.SecondOrderConeT(3)]
+
+    settings = Clarabel.Settings(direct_solve_method = :cudss)
+                                    
+    solver   = Clarabel.Solver(P, q, A, b, cones, settings)
+    Clarabel.solve!(solver)
+    
+    # Extract solution
+    x = solver.solution
+''')
+```
+It is also possible to call the julia functions directly via JuliaCall. For example, if we want to reuse the solver object and update only coefficients in the problem, we can call the following blocks,
+```
+b_new = np.array([2.0, 1.0, 1.0, 1.0], dtype=np.float64)
+jl.seval('b_gpu = CuVector{Float64,CUDA.UnifiedMemory}(b)')     #create a vector b_gpu that utilizes unified memory
+jl.copyto_b(jl.b_gpu, b_new)                                    #directly copy a cpu vector b_new to a gpu vector b_gpu with unified memory
+
+#############################################
+# jl.seval('''
+#     Clarabel.update_b!(solver,b)
+#     Clarabel.solve!(solver)
+# ''')
+#############################################
+
+jl.Clarabel.update_b_b(jl.solver,jl.b_gpu)          #Clarabel.update_b!()
+jl.Clarabel.solve_b(jl.solver)                  #Clarabel.solve!()
+```
+where we create a vector `b_gpu` with unified memory that allows us copying value from a cpu-based vector `b_new` to gpu-based vectors. Note that we need to replace `!` in a julia function with `_b`. Reversely, we can also extract value from a Julia object back to Python,
+```
+# Retrieve the solution from Julia to Python
+solution = np.array(jl.solver.solution.x)
+print("Solution:", solution)
 ```
 
 ## Citing
