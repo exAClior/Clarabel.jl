@@ -135,7 +135,7 @@ jl.copyto_b(jl.b_gpu, b_new)                                    #directly copy a
 #############################################
 
 jl.Clarabel.update_b_b(jl.solver,jl.b_gpu)          #Clarabel.update_b!()
-jl.Clarabel.solve_b(jl.solver)                  #Clarabel.solve!()
+jl.Clarabel.solve_b(jl.solver)                      #Clarabel.solve!()
 ```
 where we create a vector `b_gpu` with unified memory that allows us copying value from a cpu-based vector `b_new` to gpu-based vectors. Note that we need to replace `!` in a julia function with `_b`. Reversely, we can also extract value from a Julia object back to Python,
 ```
@@ -143,6 +143,10 @@ where we create a vector `b_gpu` with unified memory that allows us copying valu
 solution = np.array(jl.solver.solution.x)
 print("Solution:", solution)
 ```
+More examples can be found in the `example` folder.
+
+### Performance tips
+Due to the `just-in-time (JIT)` compilation in Julia, the first call of `CuClarabel` will also be slow in python and it is recommended to solve a mini problem first to trigger the JIT-compilation and get full performance on the subsequent solve of the actual problem. 
 
 ## Citing
 ```
