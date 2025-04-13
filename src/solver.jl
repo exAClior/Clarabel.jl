@@ -621,10 +621,10 @@ function gpu_data_copy!(
     A::AbstractMatrix{T},
     b::AbstractVector{T}
 ) where{T}
-    # make a copy if the input matrix is upper triangular istriu is very fast
-	if !istriu(P)
-		P_new = triu(P)  #copies 
-		P = P_new 	     #rust borrow
+    # If P matrix is on CPU, assumed to be upper triangular
+	if isa(P, SparseMatrixCSC)
+		P = SparseMatrixCSC(Symmetric(P))
 	end 
-    return (CuSparseMatrixCSR(SparseMatrixCSC(Symmetric(P))), CuVector(q), CuSparseMatrixCSR(A), CuVector(b))
+    # Allow P matrix input on GPU, but should be in the full form
+    return (CuSparseMatrixCSR(P), CuVector(q), CuSparseMatrixCSR(A), CuVector(b))
 end
