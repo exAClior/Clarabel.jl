@@ -614,19 +614,17 @@ function gpu_preprocess(
     return (settings.direct_kkt_solver && (settings.direct_solve_method in gpu_solver_list))
 end
 
-#copy data from CPU to GPU, use full matrix input at the moment
+#copy data from CPU to GPU
 function gpu_data_copy!(
     P::AbstractMatrix{T},
     q::AbstractVector{T},
     A::AbstractMatrix{T},
     b::AbstractVector{T}
 ) where{T}
-    # make a copy if the input matrix is on CPU and upper triangular, istriu is very fast
-	if isa(P, SparseMatrixCSC) && !istriu(P)
+    # make a copy if the input matrix is upper triangular istriu is very fast
+	if !istriu(P)
 		P_new = triu(P)  #copies 
 		P = P_new 	     #rust borrow
-        P = SparseMatrixCSC(Symmetric(P))
 	end 
-    # GPU input matrices are assumed to be sparse CSR
-    return (CuSparseMatrixCSR(P), CuVector(q), CuSparseMatrixCSR(A), CuVector(b))
+    return (CuSparseMatrixCSR(SparseMatrixCSC(Symmetric(P))), CuVector(q), CuSparseMatrixCSR(A), CuVector(b))
 end
