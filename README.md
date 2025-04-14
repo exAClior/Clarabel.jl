@@ -40,7 +40,7 @@ $P=P^\top \succeq 0$,
 $q \in \mathbb{R}^n$,
 $A \in \mathbb{R}^{m \times n}$, and
 $b \in \mathbb{R}^m$.
-The set $\mathcal{K}$ is a composition of convex cones; we support zero cones (linear equality constraints), nonnegative cones (linear inequality constraints), second-order cones, exponential cone and power cones. Our package relies on the external package [CUDSS.jl](https://github.com/exanauts/CUDSS.jl) for the linear system solver [CUDSS](https://developer.nvidia.com/cudss). We also support linear system solves in lower (mixed) precision.
+The set $\mathcal{K}$ is a composition of convex cones; we support zero cones (linear equality constraints), nonnegative cones (linear inequality constraints), second-order cones, exponential cone, power cones and semidefinite cones of the same dimensionality. Our package relies on the external package [CUDSS.jl](https://github.com/exanauts/CUDSS.jl) for the linear system solver [CUDSS](https://developer.nvidia.com/cudss). We also support linear system solves in lower (mixed) precision.
 
 
 ## Installation
@@ -97,6 +97,8 @@ Then, we load the package as a single variable `jl` which represents the Main mo
 ```
 from juliacall import Main as jl
 import numpy as np
+import cupy as cp
+from cupyx.scipy.sparse import csr_matrix
 # Load Clarabel in Julia
 jl.seval('using Clarabel, LinearAlgebra, SparseArrays')
 jl.seval('using CUDA, CUDA.CUSPARSE')
@@ -104,17 +106,19 @@ jl.seval('using CUDA, CUDA.CUSPARSE')
 Here we build up a simple optimization problem with a second-order cone, which is fully written by Julia.
 ```
 jl.seval('''
-    P = spzeros(3,3)
-    q = [0, -1., -1]
-    A = SparseMatrixCSC([1. 0 0; -1 0 0; 0 -1 0; 0 0 -1])
-    b = [1, 0., 0., 0.]
+    P = CuSparseMatrixCSR(sparse([2.0 1.0 0.0;
+                1.0 2.0 0.0;
+                0.0 0.0 2.0]))
+    q = CuVector([0, -1., -1])
+    A = CuSparseMatrixCSR(SparseMatrixCSC([1. 0 0; -1 0 0; 0 -1 0; 0 0 -1]))
+    b = CuVector([1, 0., 0., 0.])
 
     # 0-cone dimension 1, one second-order-cone of dimension 3
-    cones = [Clarabel.ZeroConeT(1), Clarabel.SecondOrderConeT(3)]
+    cones = Dict("f" => 1, "q"=> [3])
 
     settings = Clarabel.Settings(direct_solve_method = :cudss)
                                     
-    solver   = Clarabel.Solver(P, q, A, b, cones, settings)
+    solver   = Clarabel.Solver(P,q,A,b,cones, settings)
     Clarabel.solve!(solver)
     
     # Extract solution
@@ -123,27 +127,44 @@ jl.seval('''
 ```
 It is also possible to call the julia functions directly via JuliaCall. For example, if we want to reuse the solver object and update only coefficients in the problem, we can call the following blocks,
 ```
-b_new = np.array([2.0, 1.0, 1.0, 1.0], dtype=np.float64)
-jl.seval('b_gpu = CuVector{Float64,CUDA.UnifiedMemory}(b)')     #create a vector b_gpu that utilizes unified memory
-jl.copyto_b(jl.b_gpu, b_new)                                    #directly copy a cpu vector b_new to a gpu vector b_gpu with unified memory
+# Update b vector
+bpy = cp.array([2.0, 1.0, 1.0, 1.0], dtype=cp.float64)
+bjl = jl.Clarabel.cupy_to_cuvector(jl.Float64, int(bpy.data.ptr), bpy.size)
 
-#############################################
-# jl.seval('''
-#     Clarabel.update_b!(solver,b)
-#     Clarabel.solve!(solver)
-# ''')
-#############################################
+# "_b" is the replacement of "!" in julia function
+jl.Clarabel.update_b_b(jl.solver,bjl)          #Clarabel.update_b!()
 
-jl.Clarabel.update_b_b(jl.solver,jl.b_gpu)          #Clarabel.update_b!()
-jl.Clarabel.solve_b(jl.solver)                      #Clarabel.solve!()
+# Update P matrix
+# Define a new CSR sparse matrix on GPU
+Ppy = csr_matrix(cp.array([
+    [3.0, 0.5, 0.0],
+    [0.5, 2.0, 0.0],
+    [0.0, 0.0, 1.0]
+], dtype=cp.float64))
+
+# Extract the pointers (as integers)
+data_ptr    = int(Ppy.data.data.ptr)
+indices_ptr = int(Ppy.indices.data.ptr)
+indptr_ptr  = int(Ppy.indptr.data.ptr)
+
+# Get matrix shape and non-zero count
+n_rows, n_cols = Ppy.shape
+nnz = Ppy.nnz
+
+jl.Pjl = jl.Clarabel.cupy_to_cucsrmat(jl.Float64, data_ptr, indices_ptr, indptr_ptr, n_rows, n_cols, nnz)
+
+jl.Clarabel.update_P_b(jl.solver, jl.Pjl)          #Clarabel.update_P!()
+
+#Solve the new problem without creating memory
+jl.Clarabel.solve_b(jl.solver)                  #Clarabel.solve!()
 ```
-where we create a vector `b_gpu` with unified memory that allows us copying value from a cpu-based vector `b_new` to gpu-based vectors. Note that we need to replace `!` in a julia function with `_b`. Reversely, we can also extract value from a Julia object back to Python,
+where we update the linear cost `b` by values in a cupy vector `bpy` and the quadratic cost `P` by values in a cupy csr matrix `Ppy`. Note that we need to replace `!` in a julia function with `_b`. Reversely, we can also extract value from a Julia object back to Python,
 ```
 # Retrieve the solution from Julia to Python
 solution = np.array(jl.solver.solution.x)
 print("Solution:", solution)
 ```
-More examples can be found in the `example` folder.
+The example file can be found under the `python` folder.
 
 ### Performance tips
 Due to the `just-in-time (JIT)` compilation in Julia, the first call of `CuClarabel` will also be slow in python and it is recommended to solve a mini problem first to trigger the JIT-compilation and get full performance on the subsequent solve of the actual problem. 

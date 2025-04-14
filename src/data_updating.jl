@@ -94,7 +94,7 @@ function update_P!(
     isnothing(P) && return
     !(length(P.nzVal) == length(s.data.P.nzVal)) && error("The dimension of P is incorrect! It should be a full sparse matrix.")
 
-    _check_update_allowed(s)
+    check_data_update_allowed(s)
     d = s.data.equilibration.d
     _update_matrix(P,s.data.P,d,d)
     # overwrite KKT data 
@@ -139,7 +139,7 @@ function update_A!(
 ) where{T}
 
     isnothing(A) && return
-    _check_update_allowed(s)
+    check_data_update_allowed(s)
     d = s.data.equilibration.d
     e = s.data.equilibration.e 
     _update_matrix(A,s.data.A,e,d)
