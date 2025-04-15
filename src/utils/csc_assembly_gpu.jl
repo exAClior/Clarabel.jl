@@ -39,7 +39,7 @@ function _kernel_csr_rowcount_dense_full(
 
     #just add the nonzero count each row
     if i <= n_cones
-        rng_cones_i = rng_cones[n_shift+i] .+ row_shift
+        rng_cones_i = rng_cones[n_shift+i] .+ (row_shift + 1)
         len_i = length(rng_cones_i)
 
         @inbounds for idx in rng_cones_i
@@ -92,7 +92,7 @@ function _kernel_csr_rowcount_missing_diag_full(
     #just add the nonzero count each row
     if i <= P.dims[1]
         if(P.rowPtr[i] == P.rowPtr[i+1])    #completely empty row
-            rowptr[i] += 1
+            rowptr[i+1] += 1
             P_zero[i] = -1
             return nothing
         end
@@ -102,7 +102,7 @@ function _kernel_csr_rowcount_missing_diag_full(
             if (idx >= i) 
                 if (idx != i)
                     #i-th diagonal is missing
-                    rowptr[i] += 1
+                    rowptr[i+1] += 1
                 end
                 P_zero[i] = idx
                 return nothing
@@ -165,14 +165,14 @@ end
 function _kernel_csr_rowcount_block(
     rowptr::AbstractVector{Cint}, 
     A::AbstractSparseMatrix{T},
-    initrow::Int64
+    shift::Int64
 ) where {T}
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
     #just add the nonzero count each row
     if i <= A.dims[1]
-        rowptr[(initrow - 1) + i] += A.rowPtr[i+1] - A.rowPtr[i]
+        rowptr[shift + i + 1] += A.rowPtr[i+1] - A.rowPtr[i]
     end
 
     return nothing
@@ -181,15 +181,15 @@ end
 @inline function _csr_rowcount_block_gpu(
     rowptr::AbstractVector{Cint}, 
     A::AbstractSparseMatrix{T},
-    initrow::Int64
+    shift::Int64
 ) where {T}
     #just add the row count
-    kernel = @cuda launch=false _kernel_csr_rowcount_block(rowptr, A, initrow)
+    kernel = @cuda launch=false _kernel_csr_rowcount_block(rowptr, A, shift)
     config = launch_configuration(kernel.fun)
     threads = min(A.dims[1], config.threads)
     blocks = cld(A.dims[1], threads)
 
-    CUDA.@sync kernel(rowptr, A, initrow; threads, blocks)
+    CUDA.@sync kernel(rowptr, A, shift; threads, blocks)
 end
 
 function _kernel_csr_rowcount_block_full(
@@ -202,7 +202,7 @@ function _kernel_csr_rowcount_block_full(
 
     #just add the nonzero count each row
     if i <= P.dims[1]
-        rowptr[i] += (P.rowPtr[i+1]-P.rowPtr[i]) + (At.rowPtr[i+1]-At.rowPtr[i])
+        rowptr[i+1] += (P.rowPtr[i+1]-P.rowPtr[i]) + (At.rowPtr[i+1]-At.rowPtr[i])
     end
 
     return nothing
@@ -534,27 +534,19 @@ end
 function _csr_rowcount_to_rowptr_gpu(
     rowptr::AbstractVector{Cint}
 )
+    CUDA.@allowscalar rowptr[1] = 1
 
-    currentptr = 1
-    #Create a row vector on cpu and compute the cumulative sum on CPU
-    rowptr_cpu = Vector(rowptr)
-    @inbounds for i = 1:length(rowptr_cpu)
-       count        = rowptr_cpu[i]
-       rowptr_cpu[i]  = currentptr
-       currentptr  += count
-    end
-
-    copyto!(rowptr, rowptr_cpu)
-    rowptr_cpu = nothing        #release memory of rowptr_cpu
-
+    #Efficient scan operations for the cumulative sum
+    CUDA.accumulate!(+, rowptr, rowptr)
+ 
 end
 
-@inline function _kkt_backshift_colptrs_gpu(rowptr::AbstractVector{Cint})
+function _kkt_backshift_colptrs_gpu(rowptr::AbstractVector{Cint})
 
-    #NB: julia circshift! not used since does not operate in place on a single vector, i.e. circshift!(a,a,1) is disallowed
-    rowptr_cpu = Vector(@view rowptr[1:end-1])
-    @views copyto!(rowptr[2:end], rowptr_cpu)
+    rowptr_tmp = deepcopy(rowptr)
+    @views copyto!(rowptr[2:end], rowptr_tmp[1:end-1])
     CUDA.@allowscalar rowptr[1] = 1  #zero in C
+    rowptr_tmp = nothing                #release the memory
 
 end
 

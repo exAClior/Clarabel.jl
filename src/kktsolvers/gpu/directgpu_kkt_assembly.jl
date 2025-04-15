@@ -105,7 +105,7 @@ function _full_kkt_assemble_colcounts_gpu(
     #Count first n columns of KKT
     _csr_rowcount_block_full_gpu(rowptr, P, At)
     _csr_rowcount_missing_diag_full_gpu(rowptr, P, P_zero)
-    _csr_rowcount_block_gpu(rowptr, A, n+1)
+    _csr_rowcount_block_gpu(rowptr, A, n)
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
@@ -116,11 +116,11 @@ function _full_kkt_assemble_colcounts_gpu(
 
     CUDA.@allowscalar begin
         for i in cones.idx_eq
-            rng_cone_i = rng_cones[i] .+ n 
+            rng_cone_i = rng_cones[i] .+ (n + 1) 
             @views rowptr[rng_cone_i] .+= 1
         end
         for i in cones.idx_inq
-            rng_cone_i = rng_cones[i] .+ n 
+            rng_cone_i = rng_cones[i] .+ (n + 1) 
             @views rowptr[rng_cone_i] .+= 1
         end
     end
@@ -130,6 +130,9 @@ function _full_kkt_assemble_colcounts_gpu(
     if (n_rec > 0)
         _csr_rowcount_dense_full_gpu(rowptr, rng_cones, Cint(n), n_linear, n_rec)
     end
+
+    #cumsum total entries to convert to K.p
+    _csr_rowcount_to_rowptr_gpu(rowptr)
 
     return nothing
 end
@@ -149,9 +152,6 @@ function _full_kkt_assemble_fill_gpu(
 
     (m,n) = size(A)
     n = Cint(n)
-
-    #cumsum total entries to convert to K.p
-    _csr_rowcount_to_rowptr_gpu(rowptr)
 
     #filling [P At;A 0] parts
     _csr_fill_P_diag_full_gpu(rowptr, colval, nzval, P, P_zero, map.P)
