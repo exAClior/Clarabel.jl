@@ -77,6 +77,8 @@ function _assemble_full_kkt_matrix(
 
     P_zero = CUDA.zeros(Cint, length(rowptr))
     fill!(P_zero, false)
+    # YC: Implementation is slightly different from CPU counterparts.
+    #     On GPU, we store nnz items of each row at index i+1 rather than i to use function accumulate!().
     _full_kkt_assemble_colcounts_gpu(rowptr, P, P_zero, A, At, cones)       
     _full_kkt_assemble_fill_gpu(rowptr, colval, nzval, P, P_zero, A, At, cones, map)
 
