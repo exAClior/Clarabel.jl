@@ -142,6 +142,9 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
 
     #centrality check
     neighborhood                        = 1e-6
+
+    #GPU settings
+    soc_threshold::Int                  = 5
 end
 
 Settings(args...) = Settings{DefaultFloat}(args...)

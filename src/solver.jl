@@ -163,7 +163,7 @@ function setup!(
             s.data = use_gpu ? DefaultProblemDataGPU{T}(P,q,A,b,cones,s.settings) : DefaultProblemData{T}(P,q,A,b,cones,s.settings)
         end 
         
-        s.cones  = use_gpu ? CompositeConeGPU{T}(s.data.cones) : CompositeCone{T}(s.data.cones)
+        s.cones  = use_gpu ? CompositeConeGPU{T}(s.data.cones, s.settings.soc_threshold) : CompositeCone{T}(s.data.cones)
 
         s.data.m == s.cones.numel || throw(DimensionMismatch())
 

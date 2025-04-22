@@ -24,15 +24,7 @@ function rectify_equilibration!(
      e::CuVector{T}
 ) where{T}
 
-    n_linear = cones.n_linear
-    n_soc = cones.n_soc
-    n_exp = cones.n_exp
-    n_pow = cones.n_pow
-    n_psd = cones.n_psd
-
-    rng_cones = cones.rng_cones
-
-    n_rec = n_soc + n_exp + n_pow + n_psd
+    n_rec = cones.n_soc + cones.n_exp + cones.n_pow + cones.n_psd
     any_changed = (n_rec > 0) ? true : false
 
     #we will update e <- δ .* e using return values
@@ -40,8 +32,8 @@ function rectify_equilibration!(
     CUDA.@sync @. δ = one(T)
 
     if any_changed
-        n_shift = n_linear
-        rectify_equilibration_gpu!(δ, e, rng_cones, n_shift, n_rec)
+        n_shift = cones.n_linear
+        rectify_equilibration_gpu!(δ, e, cones.rng_cones, n_shift, n_rec)
     end
 
     return any_changed
@@ -170,26 +162,21 @@ function set_identity_scaling!(
     cones::CompositeConeGPU{T}
 ) where {T}
 
-    n_linear = cones.n_linear
-    n_soc = cones.n_soc
-    n_psd = cones.n_psd
-    rng_cones = cones.rng_cones
-    idx_inq = cones.idx_inq
-    w = cones.w
-    η = cones.η
-    R = cones.R
-    Rinv = cones.Rinv
-    Hspsd = cones.Hspsd
-    psd_dim = cones.psd_dim
+    n_linear    = cones.n_linear
+    n_soc       = cones.n_soc
+    n_psd       = cones.n_psd
+    rng_cones   = cones.rng_cones
+    w           = cones.w
     
-    set_identity_scaling_nonnegative!(w, rng_cones, idx_inq)
+    set_identity_scaling_nonnegative!(w, rng_cones, cones.idx_inq)
 
     if n_soc > 0
-        set_identity_scaling_soc!(w, η, rng_cones, n_linear, n_soc)
+        set_identity_scaling_soc!(w, cones.η, rng_cones, n_linear, n_soc)
+        set_identity_scaling_soc_sparse!(cones.d, cones.u, cones.v, rng_cones, n_linear, cones.n_sparse_soc)
     end
 
     if n_psd > 0
-        set_identity_scaling_psd!(R, Rinv, Hspsd, psd_dim, n_psd)
+        set_identity_scaling_psd!(cones.R, cones.Rinv, cones.Hspsd, cones.psd_dim, n_psd)
     end
 
     return nothing
@@ -217,12 +204,23 @@ function update_scaling!(
     w = cones.w
     λ = cones.λ
     η = cones.η
+
+    n_sparse_soc = cones.n_sparse_soc
+    d = cones.d
+    u = cones.u
+    v = cones.v
+    numel_linear = cones.numel_linear
     
     update_scaling_nonnegative!(s, z, w, λ, rng_cones, idx_inq)
 
     if n_soc > 0
         n_shift = n_linear
         update_scaling_soc!(s, z, w, λ, η, rng_cones, n_shift, n_soc)
+        if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
+            update_scaling_soc_sparse_parallel!(w, d, u, v, rng_cones, numel_linear, n_shift, n_sparse_soc)
+        elseif n_sparse_soc > 0
+            update_scaling_soc_sparse_sequential!(w, d, u, v, rng_cones, numel_linear, n_shift, n_sparse_soc)
+        end
     end
 
     if n_exp > 0
@@ -263,13 +261,25 @@ function get_Hs!(
     w = cones.w
     η = cones.η
 
+    #sparse SOCs
+    n_sparse_soc = cones.n_sparse_soc
+    d = cones.d
+
     get_Hs_zero!(Hsblocks, rng_blocks, idx_eq)
 
     get_Hs_nonnegative!(Hsblocks, w, rng_cones, rng_blocks, idx_inq)
 
     if n_soc > 0
         n_shift = n_linear
-        get_Hs_soc!(Hsblocks, w, η, rng_cones, rng_blocks, n_shift, n_soc)
+        if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
+            get_Hs_soc_sparse_parallel!(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc)
+        elseif n_sparse_soc > 0
+            get_Hs_soc_sparse_sequential!(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc)
+        end
+        n_dense_soc = n_soc - n_sparse_soc
+        if n_dense_soc > 0 
+            get_Hs_soc_dense!(Hsblocks, w, η, rng_cones, rng_blocks, n_shift + n_sparse_soc, n_sparse_soc, n_dense_soc)
+        end
     end
 
     if n_exp > 0

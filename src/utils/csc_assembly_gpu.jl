@@ -6,11 +6,6 @@ function _csr_spalloc_gpu(T::Type{<:AbstractFloat}, n::Cint, nnz::Cint)
     colval = CUDA.zeros(Cint,nnz)
     nzval  = CUDA.zeros(T,nnz)
 
-    #set the final colptr entry to 1+nnz
-    #Julia 1.7 constructor check fails without
-    #this condition
-    CUDA.@allowscalar rowptr[end] = nnz +  1
-
     return rowptr, colval, nzval
 end
 
@@ -511,6 +506,66 @@ end
     blocks = cld(blockdim, threads)
 
     CUDA.@sync kernel(rowptr, colval, nzval, diagtoKKT, offset, blockdim; threads, blocks)
+end
+
+# Populate indices for ut, vt of a sparse second-order cones
+function _kernel_csr_fill_sparsecone(
+    sparsevec::AbstractVector{Cint}, 
+    colval::AbstractVector{Cint}, 
+    colidx::Cint, 
+    rowidx::Cint,
+    blockdim::Cint
+)
+
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    if i <= blockdim
+        sparsevec[i] = rowidx + i
+        colval[sparsevec[i]] = colidx + i
+    end
+
+    return nothing
+end
+
+@inline function _csr_fill_sparsesoc_gpu(
+    sparsevec::AbstractVector{Cint}, 
+    colval::AbstractVector{Cint}, 
+    colidx::Cint, 
+    rowidx::Cint
+)
+    blockdim = Cint(length(sparsevec))
+    kernel = @cuda launch=false _kernel_csr_fill_sparsecone(sparsevec, colval, colidx, rowidx, blockdim)
+    config = launch_configuration(kernel.fun)
+    threads = min(blockdim, config.threads)
+    blocks = cld(blockdim, threads)
+
+    CUDA.@sync kernel(sparsevec, colval, colidx, rowidx, blockdim; threads, blocks)
+end
+
+function _kernel_fill_range!(
+    rowptr::AbstractVector{Cint},
+    colval::AbstractVector{Cint},
+    shift::Cint,
+    blockdim::Cint
+)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= blockdim
+        colval[rowptr[i]] = shift + i
+    end
+    return
+end
+
+@inline function _fill_range_gpu(
+    rowptr::AbstractVector{Cint},
+    colval::AbstractVector{Cint},
+    shift::Cint
+)   
+    blockdim = Cint(length(rowptr))
+    kernel = @cuda launch=false _kernel_fill_range!(rowptr, colval, shift, blockdim)
+    config = launch_configuration(kernel.fun)
+    threads = min(blockdim, config.threads)
+    blocks = cld(blockdim, threads)
+
+    CUDA.@sync kernel(rowptr, colval, shift, blockdim; threads, blocks)
 end
 
 # #same as _csr_fill_diag, but only places 0.

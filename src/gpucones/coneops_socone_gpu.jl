@@ -2,14 +2,6 @@
 # # Second Order Cone
 # # ----------------------------------------------------
 
-# #degree = 1 for SOC, since e'*e = 1
-# degree(K::SecondOrderCone{T}) where {T} = 1
-# numel(K::SecondOrderCone{T}) where {T} = K.dim
-
-# function is_sparse_expandable(K::SecondOrderCone{T}) where{T}
-#     return !isnothing(K.sparse_data)
-# end
-
 function _kernel_margins_soc(
     z::AbstractVector{T},
     α::AbstractVector{T},
@@ -160,14 +152,6 @@ function _kernel_set_identity_scaling_soc!(
             wi[j] = zero(T)
         end
         η[i]  = one(T)
-
-        # YC: no augmented sparse cone at the moment
-        # if !isnothing(K.sparse_data)
-        #     K.sparse_data.d  = T(0.5)
-        #     K.sparse_data.u .= zero(T)
-        #     K.sparse_data.u[1] = sqrt(T(0.5))
-        #     K.sparse_data.v .= zero(T)
-        # end 
     end
 
     return nothing
@@ -186,6 +170,25 @@ end
     blocks = cld(n_soc, threads)
 
     CUDA.@sync kernel(w, η, rng_cones, n_shift, n_soc; threads, blocks)
+end
+
+@inline function set_identity_scaling_soc_sparse!(
+    d::AbstractVector{T},
+    u::AbstractVector{T},
+    v::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    fill!(u, 0)
+    fill!(v, 0)
+
+    idx = 1
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        d[i]  = T(0.5)
+        u[idx] = sqrt(T(0.5))
+        idx += length(rng_cones[i + n_shift])
+    end
 end
 
 function _kernel_update_scaling_soc!(
@@ -251,37 +254,6 @@ function _kernel_update_scaling_soc!(
     end
 
     return nothing
-
-    #YC: don't support sparse SOC currently
-    # #Populate sparse expansion terms if allocated
-    # if is_sparse_expandable(K)
-
-    #     sparse_data = K.sparse_data
-
-    #     #various intermediate calcs for u,v,d
-    #     α  = 2*w[1]
-
-    #     #Scalar d is the upper LH corner of the diagonal
-    #     #term in the rank-2 update form of W^TW
-    #     wsq    = w[1]*w[1] + w1sq
-    #     wsqinv = 1/wsq
-    #     sparse_data.d    = wsqinv / 2
-
-    #     #the vectors for the rank two update
-    #     #representation of W^TW
-    #     u0  = sqrt(wsq - sparse_data.d)
-    #     u1 = α/u0
-    #     v0 = zero(T)
-    #     v1 = sqrt( 2*(2 + wsqinv)/(2*wsq - wsqinv))
-        
-    #     sparse_data.u[1] = u0
-    #     @views K.sparse_data.u[2:end] .= u1.*w[2:end]
-    #     sparse_data.v[1] = v0
-    #     @views sparse_data.v[2:end] .= v1.*w[2:end]
-
-    # end 
-
-    # return is_scaling_success = true
 end
 
 @inline function update_scaling_soc!(
@@ -301,22 +273,151 @@ end
     blocks = cld(n_soc, threads)
 
     CUDA.@sync kernel(s, z, w, λ, η, rng_cones, n_shift, n_soc; threads, blocks)
+
 end
 
-function _kernel_get_Hs_soc!(
+
+@inline function _update_scaling_soc_sparse!(
+    w::AbstractVector{T},
+    u::AbstractVector{T},
+    v::AbstractVector{T}
+) where {T}
+
+    #Populate sparse expansion terms if allocated
+    #various intermediate calcs for u,v,d
+    α  = 2*w[1]
+
+    #Scalar d is the upper LH corner of the diagonal
+    #term in the rank-2 update form of W^TW
+    
+    wsq    = 2*w[1]*w[1] - 1
+    wsqinv = 1/wsq
+    d    = wsqinv / 2
+
+    #the vectors for the rank two update
+    #representation of W^TW
+    u0  = sqrt(wsq - d)
+    u1 = α/u0
+    v0 = zero(T)
+    v1 = sqrt( 2*(2 + wsqinv)/(2*wsq - wsqinv))
+    
+    u[1] = u0
+    @views u[2:end] .= u1.*w[2:end]
+    v[1] = v0
+    @views v[2:end] .= v1.*w[2:end]
+    CUDA.synchronize()
+
+    return d
+end
+
+@inline function update_scaling_soc_sparse_sequential!(
+    w::AbstractVector{T},
+    d::AbstractVector{T},
+    u::AbstractVector{T},
+    v::AbstractVector{T},
+    rng_cones::AbstractVector,
+    numel_linear::Cint,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+        rng_sparse_i = rng_i .- numel_linear
+        wi = view(w, rng_i)
+        ui = view(u, rng_sparse_i)
+        vi = view(v, rng_sparse_i)
+
+        d[i] = _update_scaling_soc_sparse!(wi,ui,vi)
+    end
+end
+
+@inline function _kernel_update_scaling_soc_sparse_parallel!(
+    w::AbstractVector{T},
+    d::AbstractVector{T},
+    u::AbstractVector{T},
+    v::AbstractVector{T},
+    rng_cones::AbstractVector,
+    numel_linear::Cint,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+
+    if i <= n_sparse_soc 
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+        rng_sparse_i = rng_i .- numel_linear
+        wi = view(w, rng_i)
+        ui = view(u, rng_sparse_i)
+        vi = view(v, rng_sparse_i)
+
+        #Unroll function _update_scaling_soc_sparse!()
+        #Populate sparse expansion terms if allocated
+        #various intermediate calcs for u,v,d
+        α  = 2*wi[1]
+
+        #Scalar d is the upper LH corner of the diagonal
+        #term in the rank-2 update form of W^TW
+        
+        wsq    = 2*wi[1]*wi[1] - 1
+        wsqinv = 1/wsq
+        di    = wsqinv / 2
+        d[i]   = di
+
+        #the vectors for the rank two update
+        #representation of W^TW
+        u0  = sqrt(wsq - di)
+        u1 = α/u0
+        v0 = zero(T)
+        v1 = sqrt( 2*(2 + wsqinv)/(2*wsq - wsqinv))
+        
+        ui[1] = u0
+        vi[1] = v0
+
+        @inbounds for j in 2:length(ui)
+            ui[j] = u1*wi[j]
+            vi[j] = v1*wi[j]
+        end
+    end
+end
+
+@inline function update_scaling_soc_sparse_parallel!(
+    w::AbstractVector{T},
+    d::AbstractVector{T},
+    u::AbstractVector{T},
+    v::AbstractVector{T},
+    rng_cones::AbstractVector,
+    numel_linear::Cint,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    kernel = @cuda launch=false _kernel_update_scaling_soc_sparse_parallel!(w, d, u, v, rng_cones, numel_linear, n_shift, n_sparse_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_sparse_soc, config.threads)
+    blocks = cld(n_sparse_soc, threads)
+
+    CUDA.@sync kernel(w, d, u, v, rng_cones, numel_linear, n_shift, n_sparse_soc; threads, blocks)
+
+end
+
+function _kernel_get_Hs_soc_dense!(
     Hsblocks::AbstractVector{T},
     w::AbstractVector{T},
     η::AbstractVector{T},
     rng_cones::AbstractVector,
     rng_blocks::AbstractVector,
-    n_linear::Cint,
-    n_soc::Cint
+    n_shift::Cint,
+    n_sparse_soc::Cint,
+    n_dense_soc::Cint
 ) where {T}
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
-    if i <= n_soc
-        shift_i = i + n_linear
+    if i <= n_dense_soc
+        shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
         rng_block_i = rng_blocks[shift_i]
         size_i = length(rng_cone_i)
@@ -335,47 +436,103 @@ function _kernel_get_Hs_soc!(
         @inbounds for ind in 2:size_i
             Hsblocki[(ind-1)*size_i + ind] += one(T)
         end
-        Hsblocki .*= η[i]^2
+        Hsblocki .*= η[n_sparse_soc+i]^2
     end
 
     return nothing
 end
 
-@inline function get_Hs_soc!(
+@inline function get_Hs_soc_dense!(
     Hsblocks::AbstractVector{T},
     w::AbstractVector{T},
     η::AbstractVector{T},
     rng_cones::AbstractVector,
     rng_blocks::AbstractVector,
     n_shift::Cint,
-    n_soc::Cint
+    n_sparse_soc::Cint,
+    n_dense_soc::Cint
 ) where {T}
 
-    #YC: don't support sparse SOC currently
-    # if is_sparse_expandable(K)
-    #     #For sparse form, we are returning here the diagonal D block 
-    #     #from the sparse representation of W^TW, but not the
-    #     #extra two entries at the bottom right of the block.
-    #     #The AbstractVector for s and z (and its views) don't
-    #     #know anything about the 2 extra sparsifying entries
-    #     Hsblock    .= K.η^2
-    #     Hsblock[1] *= K.sparse_data.d
-    # end
-
-    kernel = @cuda launch=false _kernel_get_Hs_soc!(Hsblocks, w, η, rng_cones, rng_blocks, n_shift, n_soc)
+    kernel = @cuda launch=false _kernel_get_Hs_soc_dense!(Hsblocks, w, η, rng_cones, rng_blocks, n_shift, n_sparse_soc, n_dense_soc)
     config = launch_configuration(kernel.fun)
-    threads = min(n_soc, config.threads)
-    blocks = cld(n_soc, threads)
+    threads = min(n_dense_soc, config.threads)
+    blocks = cld(n_dense_soc, threads)
 
-    CUDA.@sync kernel(Hsblocks, w, η, rng_cones, rng_blocks, n_shift, n_soc; threads, blocks)
+    CUDA.@sync kernel(Hsblocks, w, η, rng_cones, rng_blocks, n_shift, n_sparse_soc, n_dense_soc; threads, blocks)
 
 end
 
-# function Hs_is_diagonal(
-#     K::SecondOrderCone{T}
-# ) where{T}
-#     return is_sparse_expandable(K)
-# end
+@inline function get_Hs_soc_sparse_sequential!(
+    Hsblocks::AbstractVector{T},
+    η::AbstractVector{T},
+    d::AbstractVector{T},
+    rng_blocks::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    #For sparse form, we are returning here the diagonal D block 
+    #from the sparse representation of W^TW, but not the
+    #extra two entries at the bottom right of the block.
+    #The AbstractVector for s and z (and its views) don't
+    #know anything about the 2 extra sparsifying entries
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_block_i = rng_blocks[shift_i]
+        Hsblock_i = view(Hsblocks, rng_block_i)
+        CUDA.@sync @. Hsblock_i = η[i]^2
+        Hsblock_i[1] *= d[i]
+    end
+end
+
+function _kernel_get_Hs_soc_sparse_parallel!(
+    Hsblocks::AbstractVector{T},
+    η::AbstractVector{T},
+    d::AbstractVector{T},
+    rng_blocks::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+
+    if i <= n_sparse_soc
+        shift_i = i + n_shift
+        rng_block_i = rng_blocks[shift_i]
+
+        η2 = η[i]^2
+        @inbounds for col in rng_block_i
+            Hsblocks[col] = η2
+        end
+        Hsblocks[rng_block_i.start] *= d[i]
+
+    end
+
+    return nothing
+end
+
+@inline function get_Hs_soc_sparse_parallel!(
+    Hsblocks::AbstractVector{T},
+    η::AbstractVector{T},
+    d::AbstractVector{T},
+    rng_blocks::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    #For sparse form, we are returning here the diagonal D block 
+    #from the sparse representation of W^TW, but not the
+    #extra two entries at the bottom right of the block.
+    #The AbstractVector for s and z (and its views) don't
+    #know anything about the 2 extra sparsifying entries
+    kernel = @cuda launch=false _kernel_get_Hs_soc_sparse_parallel!(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_sparse_soc, config.threads)
+    blocks = cld(n_sparse_soc, threads)
+
+    CUDA.@sync kernel(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc; threads, blocks)
+
+end
 
 # compute the product y = WᵀWx
 function _kernel_mul_Hs_soc!(

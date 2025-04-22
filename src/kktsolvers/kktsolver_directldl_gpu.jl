@@ -9,7 +9,7 @@ const CuVectorView{T} = SubArray{T, 1, CuVector{T}, Tuple{CuVector{Int}}, false}
 mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
     # problem dimensions
-    m::Int; n::Int
+    m::Int; n::Int; p::Int;
 
     # Left and right hand sides for solves
     x::CuVector{T}
@@ -60,11 +60,12 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         #construct a KKT matrix of the right shape
         KKT, map = _assemble_full_kkt_matrix(P,A,At,cones)
 
-        #YC: disabled sparse expansion and preprocess a large second-order cone into multiple small cones
+        #Need this many extra variables for sparse cones
+        p = length(map.D)
 
         #updates to the diagonal of KKT will be
         #assigned here before updating matrix entries
-        dim = m + n
+        dim = m + n + p
 
         #LHS/RHS/work for iterative refinement
         x    = CuVector{T}(undef,dim)
@@ -75,14 +76,15 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         #the expected signs of D in LDL
         Dsigns = CUDA.ones(Cint,dim)
         @views fill!(Dsigns[n+1:n+m], -one(Cint))
+        @views fill!(Dsigns[n+m+1:2:n+m+p], -one(Cint))     #for sparse SOCs
 
-        Hsblocks = map.Hsblocks
+        Hsblocks = _allocate_kkt_Hsblocks_gpu(T, cones)
         diagonal_regularizer = zero(T)
 
         #the indirect linear solver engine
         GPUsolver = GPUsolverT{T}(KKT,x,b)
 
-        return new(m,n,x,b,
+        return new(m,n,p,x,b,
                    work1,work2,map,
                    Dsigns,
                    Hsblocks,
@@ -105,7 +107,42 @@ function _update_values!(
 ) where{T,Ti}
 
     #Update values in the KKT matrix K
-    @. KKT.nzVal[index] = values
+    CUDA.@sync @. KKT.nzVal[index] = values
+
+end
+
+@inline function _update_value!(
+    KKT::AbstractMatrix{T},
+    index::Ti,
+    value::T
+) where{T,Ti}
+
+    #Update values in the KKT matrix K
+    KKT.nzVal[index] = value
+
+end
+
+@inline function _update_value!(
+    nzVal::AbstractVector{T},
+    index::Ti,
+    value::T
+) where{T,Ti}
+
+    #Update values in the KKT matrix K
+    nzVal[index] = value
+
+end
+
+function _scaled_update_values!(
+    GPUsolver::AbstractDirectLDLSolver{T},
+    KKT::CuSparseMatrix{T},
+    index::CuVector{Ti},
+    values::CuVector{T},
+    scale::T
+) where{T,Ti}
+
+    #Update values in the KKT matrix K
+    @. KKT.nzVal[index] = scale*values
 
 end
 
@@ -150,8 +187,21 @@ function _kktsolver_update_inner!(
     #Set the elements the W^tW blocks in the KKT matrix.
     get_Hs!(cones,kktsolver.Hsblocks)
 
-    @. kktsolver.Hsblocks *= -one(T)
+    CUDA.@sync @. kktsolver.Hsblocks *= -one(T)
     _update_values!(GPUsolver,KKT,map.Hsblocks,kktsolver.Hsblocks)
+
+    n_shift = cones.n_linear
+    n_sparse_soc = cones.n_sparse_soc
+    numel_linear = cones.numel_linear
+    rng_cones = cones.rng_cones
+    η = cones.η
+
+    # Update for the KKT part of the sparse socs
+    if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
+        update_KKT_sparse_soc_parallel!(KKT.nzVal, η, map.D, map.u, map.v, map.ut, map.vt, cones.u, cones.v, rng_cones, numel_linear, n_shift, n_sparse_soc)
+    elseif n_sparse_soc > 0
+        update_KKT_sparse_soc_sequential!(GPUsolver, KKT, map, cones)
+    end
 
     return _kktsolver_regularize_and_refactor!(kktsolver, GPUsolver)
 
@@ -173,13 +223,11 @@ function _kktsolver_regularize_and_refactor!(
     if(settings.static_regularization_enable)
 
         # hold a copy of the true KKT diagonal
-        @views diag_kkt .= KKT.nzVal[map.diag_full]
+        CUDA.@sync @views diag_kkt .= KKT.nzVal[map.diag_full]
         ϵ = _compute_regularizer(diag_kkt, settings)
 
         # compute an offset version, accounting for signs
-        diag_shifted .= diag_kkt
-
-        diag_shifted .+= Dsigns*ϵ
+        CUDA.@sync @. diag_shifted = diag_kkt + Dsigns*ϵ
 
         # overwrite the diagonal of KKT and within the  GPUsolver
         _update_diag_values_KKT!(KKT,map.diag_full,diag_shifted)
@@ -213,10 +261,11 @@ function kktsolver_setrhs!(
 ) where {T}
 
     b = kktsolver.b
-    (m,n) = (kktsolver.m,kktsolver.n)
+    (m,n,p) = (kktsolver.m,kktsolver.n,kktsolver.p)
 
     b[1:n]             .= rhsx
     b[(n+1):(n+m)]     .= rhsz
+    b[(n+m+1):(n+m+p)] .= 0
     
     CUDA.synchronize()
 
@@ -368,4 +417,109 @@ function _get_refine_error!(
     norme = norm(e,Inf)
 
     return norme
+end
+
+#Parallel update for KKT of the sparse socs
+function _kernel_update_KKT_sparse_soc_parallel!(
+    nzVal::AbstractVector{T},
+    η::AbstractVector{T},
+    D::AbstractVector{Cint},
+    u::AbstractVector{Cint},
+    v::AbstractVector{Cint},
+    ut::AbstractVector{Cint},
+    vt::AbstractVector{Cint},
+    uval::AbstractVector{T},
+    vval::AbstractVector{T},
+    rng_cones::AbstractVector,
+    numel_linear::Cint,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+
+    if i <= n_sparse_soc
+        η2 = η[i]*η[i]
+
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i] .- numel_linear
+
+        @inbounds for j in rng_i
+            uu = -η2*uval[j]
+            vv = -η2*vval[j]
+            nzVal[u[j]] = uu
+            nzVal[ut[j]] = uu
+            nzVal[v[j]] = vv
+            nzVal[vt[j]] = vv
+        end
+    
+        #set diagonal to η^2*(-1,1) in the extended rows/cols
+        nzVal[D[2*i-1]] = -η2
+        nzVal[D[2*i]] = η2
+    end
+
+    return nothing
+end
+
+@inline function update_KKT_sparse_soc_parallel!(
+    nzVal::AbstractVector{T},
+    η::AbstractVector{T},
+    D::AbstractVector{Cint},
+    u::AbstractVector{Cint},
+    v::AbstractVector{Cint},
+    ut::AbstractVector{Cint},
+    vt::AbstractVector{Cint},
+    uval::AbstractVector{T},
+    vval::AbstractVector{T},
+    rng_cones::AbstractVector,
+    numel_linear::Cint,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    
+    kernel = @cuda launch=false _kernel_update_KKT_sparse_soc_parallel!(nzVal, η, D, u, v, ut, vt, uval, vval, rng_cones, numel_linear, n_shift, n_sparse_soc)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_sparse_soc, config.threads)
+    blocks = cld(n_sparse_soc, threads)
+
+    CUDA.@sync kernel(nzVal, η, D, u, v, ut, vt, uval, vval, rng_cones, numel_linear, n_shift, n_sparse_soc; threads, blocks)
+
+end
+
+#Sequential update for KKT of the sparse socs
+@inline function update_KKT_sparse_soc_sequential!(
+    GPUsolver::AbstractDirectLDLSolver{T},
+    KKT::CuSparseMatrix{T},
+    map::GPUDataMap,
+    cones::CompositeConeGPU{T}
+) where {T}
+    
+    n_shift = cones.n_linear
+
+    prow = one(Cint)
+    CUDA.@allowscalar for i in 1:cones.n_sparse_soc
+        ηi = cones.η[i]
+        η2 = ηi*ηi
+
+        shift_i = i + n_shift
+        rng_i = cones.rng_cones[shift_i] .- cones.numel_linear
+
+        ui_idx = view(map.u, rng_i)
+        vi_idx = view(map.v, rng_i)
+        uti_idx = view(map.ut, rng_i)
+        vti_idx = view(map.vt, rng_i)
+        ui_val = view(cones.u, rng_i)
+        vi_val = view(cones.v, rng_i)
+        _scaled_update_values!(GPUsolver,KKT,ui_idx,ui_val,-η2)
+        _scaled_update_values!(GPUsolver,KKT,uti_idx,ui_val,-η2)
+        _scaled_update_values!(GPUsolver,KKT,vi_idx,vi_val,-η2)
+        _scaled_update_values!(GPUsolver,KKT,vti_idx,vi_val,-η2)
+
+        #set diagonal to η^2*(-1,1) in the extended rows/cols
+        _update_value!(KKT,map.D[prow], -η2)
+        _update_value!(KKT,map.D[prow+1], η2)
+        prow += 2
+    end
+
+    CUDA.synchronize()
 end

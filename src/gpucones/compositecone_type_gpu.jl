@@ -12,6 +12,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
 
     #overall size of the composite cone
     numel::Cint
+    numel_linear::Cint
     degree::Cint
 
     #range views
@@ -22,6 +23,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     _is_symmetric::Bool
     n_linear::Cint
     n_nn::Cint
+    n_sparse_soc::Cint
     n_soc::Cint
     n_exp::Cint
     n_pow::Cint
@@ -34,6 +36,11 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     w::CuVector{T}
     λ::CuVector{T}
     η::CuVector{T}
+
+    #sparse SOC data
+    d::CuVector{T}
+    u::CuVector{T}
+    v::CuVector{T}
 
     #nonsymmetric cone
     αp::CuVector{T}           #power parameters of power cones
@@ -61,7 +68,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     #step_size
     α::CuVector{T}
 
-    function CompositeConeGPU{T}(cone_specs::Vector{SupportedCone}) where {T}
+    function CompositeConeGPU{T}(cone_specs::Vector{SupportedCone}, soc_threshold::Int) where {T}
 
         #Information from the CompositeCone on CPU 
         n_zero = count(x -> typeof(x) == ZeroConeT, cone_specs)
@@ -103,12 +110,20 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         end
 
         #count up elements and degree
+        #idx set for sparse socs 
+        @views n_sparse_soc = Cint(count(cone -> (nvars(cone) > soc_threshold), cone_specs[(n_linear+1):(n_linear+n_soc)]))
+
+        @views numel_sparse_soc  = sum(cone -> nvars(cone), cone_specs[n_linear+1:n_linear+n_sparse_soc]; init = 0)
+        u = CuVector{T}(undef,numel_sparse_soc)
+        v = CuVector{T}(undef,numel_sparse_soc)
+        d = CuVector{T}(undef,n_sparse_soc)
+
         numel  = sum(cone -> nvars(cone), cone_specs; init = 0)
         degree = sum(cone -> degrees(cone), cone_specs; init = 0)
 
         #Generate ranges for cones
         rng_cones  = CuVector{UnitRange{Cint}}(collect(rng_cones_iterator(cone_specs)));
-        rng_blocks = CuVector{UnitRange{Cint}}(collect(rng_blocks_iterator_full(cone_specs)));
+        rng_blocks = CuVector{UnitRange{Cint}}(collect(rng_blocks_iterator_full(cone_specs, soc_threshold)));
 
         @views numel_linear  = sum(cone -> nvars(cone), cone_specs[1:n_linear]; init = 0)
         @views numel_soc  = sum(cone -> nvars(cone), cone_specs[n_linear+1:n_linear+n_soc]; init = 0)
@@ -158,10 +173,10 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
 
         α = CuVector{T}(undef, numel) #workspace for step size calculation and neighborhood check
 
-        return new(type_counts, numel, degree, rng_cones, rng_blocks, _is_symmetric,
-                n_linear, n_nn, n_soc, n_exp, n_pow, n_psd,
-                idx_eq,idx_inq,
-                w,λ,η,
+        return new(type_counts, numel, numel_linear, degree, rng_cones, rng_blocks, _is_symmetric,
+                n_linear, n_nn, n_sparse_soc, n_soc, n_exp, n_pow, n_psd,
+                idx_eq, idx_inq,
+                w, λ, η, d, u, v,
                 αp,H_dual,Hs,grad,
                 psd_dim, chol1, chol2, SVD, λpsd, Λisqrt, R, Rinv, Hspsd, workmat1, workmat2, workmat3, workvec,
                 α)
@@ -187,10 +202,11 @@ end
 # in a cone or cone-related blocks in the Hessian
 struct RangeBlocksIteratorFull
     cones::Vector{SupportedCone}
+    soc_threshold::Int
 end
 
-function rng_blocks_iterator_full(cones::Vector{SupportedCone})
-    RangeBlocksIteratorFull(cones)
+function rng_blocks_iterator_full(cones::Vector{SupportedCone}, soc_threshold::Int)
+    RangeBlocksIteratorFull(cones, soc_threshold)
 end
 
 Base.length(iter::RangeBlocksIteratorFull) = length(iter.cones)
@@ -202,7 +218,7 @@ function Base.iterate(iter::RangeBlocksIteratorFull, state=(1, 1))
     else 
         cone = iter.cones[coneidx]
         nvars = Clarabel.nvars(cone)
-        if (typeof(cone) == ZeroConeT || typeof(cone) == NonnegativeConeT)
+        if (typeof(cone) == ZeroConeT || typeof(cone) == NonnegativeConeT || (typeof(cone) == SecondOrderConeT && nvars > iter.soc_threshold))
             stop = start + nvars - 1
         else
             stop = start + nvars*nvars - 1

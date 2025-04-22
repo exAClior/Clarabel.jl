@@ -7,6 +7,7 @@ module Clarabel
     const DefaultFloat = Float64
     const DefaultInt   = Int64
     const SOC_NO_EXPANSION_MAX_SIZE   = 5  # maximal size of second-order cones in GPU implementation
+    const SPARSE_SOC_PARALELL_NUM   = 128  # the threshold for parallel datat update of sparse SOCs on GPU
 
     # Rust-like Option type
     const Option{T} = Union{Nothing,T} 
