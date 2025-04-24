@@ -174,20 +174,19 @@ end
 
 @inline function set_identity_scaling_soc_sparse!(
     d::AbstractVector{T},
-    u::AbstractVector{T},
-    v::AbstractVector{T},
+    vut::AbstractVector{T},
     rng_cones::AbstractVector,
     n_shift::Cint,
     n_sparse_soc::Cint
 ) where {T}
-    fill!(u, 0)
-    fill!(v, 0)
+    fill!(vut, 0)
 
-    idx = 1
+    shift = 1
     CUDA.@allowscalar for i in 1:n_sparse_soc
         d[i]  = T(0.5)
-        u[idx] = sqrt(T(0.5))
-        idx += length(rng_cones[i + n_shift])
+        len_i = length(rng_cones[i + n_shift])
+        vut[shift+len_i] = sqrt(T(0.5))
+        shift += 2*len_i
     end
 end
 
@@ -313,8 +312,7 @@ end
 @inline function update_scaling_soc_sparse_sequential!(
     w::AbstractVector{T},
     d::AbstractVector{T},
-    u::AbstractVector{T},
-    v::AbstractVector{T},
+    vut::AbstractVector{T},
     rng_cones::AbstractVector,
     numel_linear::Cint,
     n_shift::Cint,
@@ -323,10 +321,12 @@ end
     CUDA.@allowscalar for i in 1:n_sparse_soc
         shift_i = i + n_shift
         rng_i = rng_cones[shift_i]
+        len_i = length(rng_i)
         rng_sparse_i = rng_i .- numel_linear
+        startidx = 2*(rng_sparse_i.stop - len_i)
         wi = view(w, rng_i)
-        ui = view(u, rng_sparse_i)
-        vi = view(v, rng_sparse_i)
+        vi = view(vut, (startidx+1):(startidx+len_i))
+        ui = view(vut, (startidx+len_i+1):(startidx+2*len_i))
 
         d[i] = _update_scaling_soc_sparse!(wi,ui,vi)
     end
@@ -335,8 +335,7 @@ end
 @inline function _kernel_update_scaling_soc_sparse_parallel!(
     w::AbstractVector{T},
     d::AbstractVector{T},
-    u::AbstractVector{T},
-    v::AbstractVector{T},
+    vut::AbstractVector{T},
     rng_cones::AbstractVector,
     numel_linear::Cint,
     n_shift::Cint,
@@ -348,10 +347,12 @@ end
     if i <= n_sparse_soc 
         shift_i = i + n_shift
         rng_i = rng_cones[shift_i]
+        len_i = length(rng_i)
         rng_sparse_i = rng_i .- numel_linear
+        startidx = 2*(rng_sparse_i.stop - len_i)
         wi = view(w, rng_i)
-        ui = view(u, rng_sparse_i)
-        vi = view(v, rng_sparse_i)
+        vi = view(vut, (startidx+1):(startidx+len_i))
+        ui = view(vut, (startidx+len_i+1):(startidx+2*len_i))
 
         #Unroll function _update_scaling_soc_sparse!()
         #Populate sparse expansion terms if allocated
@@ -386,20 +387,19 @@ end
 @inline function update_scaling_soc_sparse_parallel!(
     w::AbstractVector{T},
     d::AbstractVector{T},
-    u::AbstractVector{T},
-    v::AbstractVector{T},
+    vut::AbstractVector{T},
     rng_cones::AbstractVector,
     numel_linear::Cint,
     n_shift::Cint,
     n_sparse_soc::Cint
 ) where {T}
 
-    kernel = @cuda launch=false _kernel_update_scaling_soc_sparse_parallel!(w, d, u, v, rng_cones, numel_linear, n_shift, n_sparse_soc)
+    kernel = @cuda launch=false _kernel_update_scaling_soc_sparse_parallel!(w, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
     config = launch_configuration(kernel.fun)
     threads = min(n_sparse_soc, config.threads)
     blocks = cld(n_sparse_soc, threads)
 
-    CUDA.@sync kernel(w, d, u, v, rng_cones, numel_linear, n_shift, n_sparse_soc; threads, blocks)
+    CUDA.@sync kernel(w, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc; threads, blocks)
 
 end
 

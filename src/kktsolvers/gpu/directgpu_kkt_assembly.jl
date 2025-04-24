@@ -25,11 +25,9 @@ struct GPUDataMap
     diagP::CuVector{Cint}
     diag_full::CuVector{Cint}
 
-    #mapping for sparse SOCs 
-    u::CuVector{Cint}
-    v::CuVector{Cint}
-    ut::CuVector{Cint}
-    vt::CuVector{Cint}
+    #index mapping for sparse SOCs 
+    vu::CuVector{Cint}
+    vut::CuVector{Cint}
     D::CuVector{Cint}
     
     function GPUDataMap(
@@ -56,16 +54,14 @@ struct GPUDataMap
         n_linear = cones.n_linear
         n_sparse_soc = cones.n_sparse_soc
         CUDA.@allowscalar lensparse = sum(cone -> length(cone), cones.rng_cones[(n_linear+1):(n_linear+n_sparse_soc)])
-        u = CUDA.zeros(Cint, lensparse)
-        v = CUDA.zeros(Cint, lensparse)
-        ut = CUDA.zeros(Cint, lensparse)
-        vt = CUDA.zeros(Cint, lensparse)
+        vu = CUDA.zeros(Cint, 2*lensparse)
+        vut = CUDA.zeros(Cint, 2*lensparse)
         D = CUDA.zeros(Cint, 2*n_sparse_soc)
 
         diag_full = CUDA.zeros(Cint,m+n+2*n_sparse_soc)
 
         return new(P, A, At, Hsblocks, diagP, diag_full,
-                    u, v, ut, vt, D)
+                    vu, vut, D)
     end
 
 end
@@ -90,7 +86,7 @@ function _assemble_full_kkt_matrix(
     (n - nnz_diagP) +           # Number of elements in diagonal top left block, remove double count on the diagonal if P has entries
     2*nnz(A) +                  # Number of nonzeros in A and A'
     nnz_Hsblocks +              # Number of elements in diagonal below A'
-    4*length(map.u) +           # Number of elements in sparse cone off diagonals
+    2*length(map.vu) +           # Number of elements in sparse cone off diagonals
     p                           # Number of elements in diagonal of sparse cones
     )
 
@@ -246,37 +242,38 @@ function _full_kkt_assemble_fill_gpu(
         #add sparse expansions columns for sparse cones 
         rng_cone_i = rng_cones[n_linear + i] .+ n
         len_i = length(rng_cone_i)
-        rng_vec_i = (sparse_idx+1):(sparse_idx+len_i)
+        rng_vec_vt = (sparse_idx+1):(sparse_idx+len_i)
+        rng_vec_ut = (sparse_idx+len_i+1):(sparse_idx+2*len_i)
 
         rowptr_i = view(rowptr, rng_cone_i)
-
-        @views @. map.v[rng_vec_i] = rowptr_i
+        #regard each vi ui sequentially
+        @views @. map.vu[rng_vec_vt] = rowptr_i
         @views @. colval[rowptr_i] = prow
         @views @. rowptr_i += 1
+        CUDA.synchronize()
 
-        @views @. map.u[rng_vec_i] = rowptr_i
+        @views @. map.vu[rng_vec_ut] = rowptr_i
         @views @. colval[rowptr_i] = prow + 1
         @views @. rowptr_i += 1
+        CUDA.synchronize()
 
         #add sparse expansions rows for sparse cones 
-        colidx = Cint(rng_cone_i.start - 1)
+        start_col = Cint(rng_cone_i.start - 1)
 
-        rowidx = Cint(rowptr[prow] - 1)
-        vti = view(map.vt, rng_vec_i)
-        _csr_fill_sparsesoc_gpu(vti, colval, colidx, rowidx)
+        start_v = Cint(rowptr[prow] - 1)
+        start_u = Cint(rowptr[prow+1] - 1)
+        vti = view(map.vut, rng_vec_vt)
+        uti = view(map.vut, rng_vec_ut)
+        _csr_fill_sparse_uv_gpu(vti, uti, colval, start_col, start_v, start_u)
         rowptr[prow] += len_i
-
-        rowidx = Cint(rowptr[prow+1] - 1)
-        uti = view(map.ut, rng_vec_i)
-        _csr_fill_sparsesoc_gpu(uti, colval, colidx, rowidx)
         rowptr[prow+1] += len_i
 
-        sparse_idx += len_i
-        prow += 2 #next sparse row to fill 
+        sparse_idx += 2*len_i
+        prow += 2 #next sparse soc to fill 
     end
 
     if n_sparse_soc > 0
-        #final ssttings for map.D 
+        #final settings for map.D 
         rng_D = (m + n + 1):(m + n + 2*n_sparse_soc)
         rowptr_D = view(rowptr, rng_D)
         CUDA.@sync @. map.D = rowptr_D
@@ -284,10 +281,8 @@ function _full_kkt_assemble_fill_gpu(
         CUDA.@sync @. rowptr_D += 1
 
         #fill in nzval with 0s
-        @views @. nzval[map.u] = 0.
-        @views @. nzval[map.v] = 0.
-        @views @. nzval[map.ut] = 0.
-        @views @. nzval[map.vt] = 0.
+        @views @. nzval[map.vu] = 0.
+        @views @. nzval[map.vut] = 0.
         @views @. nzval[map.D] = 0.
     end
     CUDA.synchronize()
@@ -297,7 +292,7 @@ function _full_kkt_assemble_fill_gpu(
     if (n_rec > 0)
         _csr_fill_dense_full_gpu(rowptr, colval, nzval, map.Hsblocks, rng_cones, rng_blocks, n_linear+n_sparse_soc, Cint(n), n_rec)
     end
-    
+
     #backshift the colptrs to recover K.p again
     _kkt_backshift_colptrs_gpu(rowptr)
 

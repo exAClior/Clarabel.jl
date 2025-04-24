@@ -39,8 +39,8 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
 
     #sparse SOC data
     d::CuVector{T}
-    u::CuVector{T}
-    v::CuVector{T}
+    vut::CuVector{T}
+    Matvut::CuSparseMatrix{T}
 
     #nonsymmetric cone
     αp::CuVector{T}           #power parameters of power cones
@@ -109,15 +109,6 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
             typeof(cone_specs[i]) === ZeroConeT ? idx_eq[eq_i+=1] = i : idx_inq[inq_i+=1] = i 
         end
 
-        #count up elements and degree
-        #idx set for sparse socs 
-        @views n_sparse_soc = Cint(count(cone -> (nvars(cone) > soc_threshold), cone_specs[(n_linear+1):(n_linear+n_soc)]))
-
-        @views numel_sparse_soc  = sum(cone -> nvars(cone), cone_specs[n_linear+1:n_linear+n_sparse_soc]; init = 0)
-        u = CuVector{T}(undef,numel_sparse_soc)
-        v = CuVector{T}(undef,numel_sparse_soc)
-        d = CuVector{T}(undef,n_sparse_soc)
-
         numel  = sum(cone -> nvars(cone), cone_specs; init = 0)
         degree = sum(cone -> degrees(cone), cone_specs; init = 0)
 
@@ -173,10 +164,40 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
 
         α = CuVector{T}(undef, numel) #workspace for step size calculation and neighborhood check
 
+        #count up elements and degree
+        #idx set for sparse socs 
+        @views n_sparse_soc = Cint(count(cone -> (nvars(cone) > soc_threshold), cone_specs[(n_linear+1):(n_linear+n_soc)]))
+        d = CuVector{T}(undef, n_sparse_soc)
+
+        @views numel_sparse_soc  = sum(cone -> nvars(cone), cone_specs[n_linear+1:n_linear+n_sparse_soc]; init = 0)
+        vut = CuVector{T}(undef, 2*numel_sparse_soc)
+        rowptr = CuVector{Cint}(undef, 2*n_sparse_soc+1)
+        colval = CuVector{Cint}(undef, 2*numel_sparse_soc)
+
+        CUDA.@allowscalar for i in one(Cint):n_sparse_soc
+            shift_i = i + n_linear
+            rng_i = rng_cones[shift_i]
+            len_i = length(rng_i)
+
+            rowptr[2*i] = len_i
+            rowptr[2*i+1] = len_i
+
+            rng_sparse_i = rng_i .- numel_linear
+            startidx = 2*(rng_sparse_i.stop - len_i)
+            colvi = view(colval, (startidx+1):(startidx+len_i))
+            colui = view(colval, (startidx+len_i+1):(startidx+2*len_i))
+            copyto!(colvi, collect(rng_sparse_i))
+            copyto!(colui, collect(rng_sparse_i))
+        end
+        accumulate!(+, rowptr, rowptr)
+        CUDA.@sync @. rowptr += 1
+
+        Matvut = CuSparseMatrixCSR{T}(rowptr, colval, vut, (2*n_sparse_soc, numel))
+
         return new(type_counts, numel, numel_linear, degree, rng_cones, rng_blocks, _is_symmetric,
                 n_linear, n_nn, n_sparse_soc, n_soc, n_exp, n_pow, n_psd,
                 idx_eq, idx_inq,
-                w, λ, η, d, u, v,
+                w, λ, η, d, vut, Matvut,
                 αp,H_dual,Hs,grad,
                 psd_dim, chol1, chol2, SVD, λpsd, Λisqrt, R, Rinv, Hspsd, workmat1, workmat2, workmat3, workvec,
                 α)

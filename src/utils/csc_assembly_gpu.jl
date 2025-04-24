@@ -510,35 +510,41 @@ end
 
 # Populate indices for ut, vt of a sparse second-order cones
 function _kernel_csr_fill_sparsecone(
-    sparsevec::AbstractVector{Cint}, 
+    vt::AbstractVector{Cint}, 
+    ut::AbstractVector{Cint}, 
     colval::AbstractVector{Cint}, 
-    colidx::Cint, 
-    rowidx::Cint,
+    start_col::Cint, 
+    start_v::Cint,
+    start_u::Cint,
     blockdim::Cint
 )
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
     if i <= blockdim
-        sparsevec[i] = rowidx + i
-        colval[sparsevec[i]] = colidx + i
+        vt[i] = start_v + i
+        ut[i] = start_u + i
+        colval[vt[i]] = start_col + i
+        colval[ut[i]] = start_col + i
     end
 
     return nothing
 end
 
-@inline function _csr_fill_sparsesoc_gpu(
-    sparsevec::AbstractVector{Cint}, 
+@inline function _csr_fill_sparse_uv_gpu(
+    vt::AbstractVector{Cint}, 
+    ut::AbstractVector{Cint}, 
     colval::AbstractVector{Cint}, 
-    colidx::Cint, 
-    rowidx::Cint
+    start_col::Cint, 
+    start_v::Cint,
+    start_u::Cint
 )
-    blockdim = Cint(length(sparsevec))
-    kernel = @cuda launch=false _kernel_csr_fill_sparsecone(sparsevec, colval, colidx, rowidx, blockdim)
+    blockdim = Cint(length(vt))
+    kernel = @cuda launch=false _kernel_csr_fill_sparsecone(vt, ut, colval, start_col, start_v, start_u, blockdim)
     config = launch_configuration(kernel.fun)
     threads = min(blockdim, config.threads)
     blocks = cld(blockdim, threads)
 
-    CUDA.@sync kernel(sparsevec, colval, colidx, rowidx, blockdim; threads, blocks)
+    CUDA.@sync kernel(vt, ut, colval, start_col, start_v, start_u, blockdim; threads, blocks)
 end
 
 function _kernel_fill_range!(

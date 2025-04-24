@@ -36,7 +36,7 @@ struct CUDSSDirectLDLSolverMixed{T} <: AbstractDirectLDLSolver{T}
 end
 
 ldlsolver_constructor(::Val{:cudssmixed}) = CUDSSDirectLDLSolverMixed
-ldlsolver_matrix_shape(::Val{CUDSSDirectLDLSolverMixed}) = :full
+ldlsolver_matrix_shape(::Val{:cudssmixed}) = :full
 
 #refactor the linear system
 function refactor!(ldlsolver::CUDSSDirectLDLSolverMixed{T}) where{T}

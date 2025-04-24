@@ -23,6 +23,11 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
     #KKT mapping from problem data to KKT
     map::GPUDataMap 
 
+    cones::CompositeConeGPU{T}
+    P::CuSparseMatrix{T}
+    A::CuSparseMatrix{T}
+    At::CuSparseMatrix{T}
+
     #the expected signs of D in KKT = LDL^T
     Dsigns::CuVector{Cint}
 
@@ -86,6 +91,7 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
         return new(m,n,p,x,b,
                    work1,work2,map,
+                   cones,P,A,At,
                    Dsigns,
                    Hsblocks,
                    KKT,settings,GPUsolver,
@@ -198,7 +204,7 @@ function _kktsolver_update_inner!(
 
     # Update for the KKT part of the sparse socs
     if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
-        update_KKT_sparse_soc_parallel!(KKT.nzVal, η, map.D, map.u, map.v, map.ut, map.vt, cones.u, cones.v, rng_cones, numel_linear, n_shift, n_sparse_soc)
+        update_KKT_sparse_soc_parallel!(KKT.nzVal, η, map.D, map.vu, map.vut, cones.vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
     elseif n_sparse_soc > 0
         update_KKT_sparse_soc_sequential!(GPUsolver, KKT, map, cones)
     end
@@ -360,6 +366,7 @@ function  _iterative_refinement(
 
     #compute the initial error
     norme = _get_refine_error!(e,b,KKT,x)
+    # norme = _get_refine_error!(kktsolver,e,b,x) 
     isfinite(norme) || return is_success = false
 
     for i = 1:IR_maxiter
@@ -419,17 +426,135 @@ function _get_refine_error!(
     return norme
 end
 
+# function _get_refine_error!(
+#     kktsolver::GPULDLKKTSolver{T},
+#     e::CuVector{T},
+#     b::CuVector{T},
+#     ξ::CuVector{T}) where {T}
+
+#     m = kktsolver.m 
+#     n = kktsolver.n
+#     p = kktsolver.p
+
+#     cones = kktsolver.cones
+#     Matvut = cones.Matvut
+#     P = kktsolver.P
+#     A = kktsolver.A
+#     At = kktsolver.At
+
+#     e1 = view(e, 1:n)
+#     e2 = view(e, (n+1):(n+m))
+#     ξ1 = view(ξ, 1:n)
+#     ξ2 = view(ξ, (n+1):(n+m))
+    
+#     # mul!(e,KKT,ξ)    # e = b - Kξ
+#     mul!(e1, At, ξ2)
+#     mul!(e1, P, ξ1, one(T), one(T))
+#     CUDA.@sync @. e2 = 0
+#     Clarabel.mul_Hs_diag!(cones, e2, ξ2)
+#     mul!(e2, A, ξ1, one(T), -one(T))
+
+#     n_sparse_soc = cones.n_sparse_soc
+#     d = cones.d
+#     η = cones.η
+
+#     CUDA.@allowscalar if n_sparse_soc > 0
+#         e3 = view(e, (n+m+1):(n+m+p))
+#         ξ3 = view(ξ, (n+m+1):(n+m+p))
+#         @inbounds for i in 1:n_sparse_soc
+#             shift_i = i + cones.n_linear
+#             rng_i = cones.rng_cones[shift_i]
+#             rng_sparse_i = rng_i .- cones.numel_linear
+#             e2i = view(e2, rng_i)
+#             ξ2i = view(ξ2, rng_i)
+#             η2 = η[i]^2
+
+#             e2i[1] -= η2*(d[i] - 1)*ξ2i[1]
+#             CUDA.@sync @. e2i -= η2*ξ2i
+#             e3[2*i-1] = -η2*ξ3[2*i-1]
+#             e3[2*i] = η2*ξ3[2*i]
+#         end
+
+#         mul!(e2, Matvut', ξ3, one(T), one(T))
+#         mul!(e3, Matvut, ξ2, one(T), one(T))
+#     end
+
+#     CUDA.@sync @. e = b - e
+#     # println(e[(n+1):(n+2)])
+#     norme = norm(e,Inf)
+
+#     return norme
+# end
+
+# function _get_refine_error!(
+#     kktsolver::GPULDLKKTSolver{T},
+#     e::CuVector{T},
+#     b::CuVector{T},
+#     ξ::CuVector{T}) where {T}
+
+#     m = kktsolver.m 
+#     n = kktsolver.n
+#     p = kktsolver.p
+
+#     cones = kktsolver.cones
+#     P = kktsolver.P
+#     A = kktsolver.A
+#     At = kktsolver.At
+
+#     e1 = view(e, 1:n)
+#     e2 = view(e, (n+1):(n+m))
+#     ξ1 = view(ξ, 1:n)
+#     ξ2 = view(ξ, (n+1):(n+m))
+    
+#     # mul!(e,KKT,ξ)    # e = b - Kξ
+#     mul!(e1, At, ξ2)
+#     CUDA.@sync @. e2 = 0
+#     Clarabel.mul_Hs_diag!(cones, e2, ξ2)
+#     mul!(e1, P, ξ1, one(T), one(T))
+#     mul!(e2, A, ξ1, one(T), -one(T))
+
+#     n_sparse_soc = cones.n_sparse_soc
+#     d = cones.d
+#     u = cones.u
+#     v = cones.v
+#     η = cones.η
+
+#     CUDA.@allowscalar if n_sparse_soc > 0
+#         e3 = view(e, (n+m+1):(n+m+p))
+#         ξ3 = view(ξ, (n+m+1):(n+m+p))
+#         @inbounds for i in 1:n_sparse_soc
+#             shift_i = i + cones.n_linear
+#             rng_i = cones.rng_cones[shift_i]
+#             rng_sparse_i = rng_i .- cones.numel_linear
+#             ui = view(u, rng_sparse_i)
+#             vi = view(v, rng_sparse_i)
+#             e2i = view(e2, rng_i)
+#             ξ2i = view(ξ2, rng_i)
+#             η2 = η[i]^2
+
+#             e2i[1] -= η2*(d[i] - 1)*ξ2i[1]
+#             CUDA.@sync @. e2i -= η2*(ξ2i + vi*ξ3[2*i-1] + ui*ξ3[2*i])
+#             e3[2*i-1] = -η2*(dot(ξ2i, vi) + ξ3[2*i-1])
+#             e3[2*i] = -η2*(dot(ξ2i, ui) - ξ3[2*i])
+#         end
+#     end
+#     CUDA.synchronize()
+#     @. e = b - e
+#     CUDA.synchronize()
+#     # println(e[(n+1):(n+2)])
+#     norme = norm(e,Inf)
+
+#     return norme
+# end
+
 #Parallel update for KKT of the sparse socs
 function _kernel_update_KKT_sparse_soc_parallel!(
     nzVal::AbstractVector{T},
     η::AbstractVector{T},
     D::AbstractVector{Cint},
-    u::AbstractVector{Cint},
-    v::AbstractVector{Cint},
-    ut::AbstractVector{Cint},
-    vt::AbstractVector{Cint},
-    uval::AbstractVector{T},
-    vval::AbstractVector{T},
+    vu::AbstractVector{Cint},
+    vut::AbstractVector{Cint},
+    vutval::AbstractVector{T},
     rng_cones::AbstractVector,
     numel_linear::Cint,
     n_shift::Cint,
@@ -443,14 +568,13 @@ function _kernel_update_KKT_sparse_soc_parallel!(
 
         shift_i = i + n_shift
         rng_i = rng_cones[shift_i] .- numel_linear
+        endidx = 2*rng_i.stop
+        startidx = endidx - 2*length(rng_i) + 1
 
-        @inbounds for j in rng_i
-            uu = -η2*uval[j]
-            vv = -η2*vval[j]
-            nzVal[u[j]] = uu
-            nzVal[ut[j]] = uu
-            nzVal[v[j]] = vv
-            nzVal[vt[j]] = vv
+        @inbounds for j in startidx:endidx
+            val = -η2*vutval[j]
+            nzVal[vu[j]] = val
+            nzVal[vut[j]] = val
         end
     
         #set diagonal to η^2*(-1,1) in the extended rows/cols
@@ -465,24 +589,21 @@ end
     nzVal::AbstractVector{T},
     η::AbstractVector{T},
     D::AbstractVector{Cint},
-    u::AbstractVector{Cint},
-    v::AbstractVector{Cint},
-    ut::AbstractVector{Cint},
-    vt::AbstractVector{Cint},
-    uval::AbstractVector{T},
-    vval::AbstractVector{T},
+    vu::AbstractVector{Cint},
+    vut::AbstractVector{Cint},
+    vutval::AbstractVector{T},
     rng_cones::AbstractVector,
     numel_linear::Cint,
     n_shift::Cint,
     n_sparse_soc::Cint
 ) where {T}
     
-    kernel = @cuda launch=false _kernel_update_KKT_sparse_soc_parallel!(nzVal, η, D, u, v, ut, vt, uval, vval, rng_cones, numel_linear, n_shift, n_sparse_soc)
+    kernel = @cuda launch=false _kernel_update_KKT_sparse_soc_parallel!(nzVal, η, D, vu, vut, vutval, rng_cones, numel_linear, n_shift, n_sparse_soc)
     config = launch_configuration(kernel.fun)
     threads = min(n_sparse_soc, config.threads)
     blocks = cld(n_sparse_soc, threads)
 
-    CUDA.@sync kernel(nzVal, η, D, u, v, ut, vt, uval, vval, rng_cones, numel_linear, n_shift, n_sparse_soc; threads, blocks)
+    CUDA.@sync kernel(nzVal, η, D, vu, vut, vutval, rng_cones, numel_linear, n_shift, n_sparse_soc; threads, blocks)
 
 end
 
@@ -496,28 +617,28 @@ end
     
     n_shift = cones.n_linear
 
+    sparse_idx = 0
     prow = one(Cint)
     CUDA.@allowscalar for i in 1:cones.n_sparse_soc
         ηi = cones.η[i]
         η2 = ηi*ηi
 
         shift_i = i + n_shift
-        rng_i = cones.rng_cones[shift_i] .- cones.numel_linear
+        len_i = length(cones.rng_cones[shift_i])
+        rng_i = (sparse_idx+1):(sparse_idx+2*len_i)
 
-        ui_idx = view(map.u, rng_i)
-        vi_idx = view(map.v, rng_i)
-        uti_idx = view(map.ut, rng_i)
-        vti_idx = view(map.vt, rng_i)
-        ui_val = view(cones.u, rng_i)
-        vi_val = view(cones.v, rng_i)
-        _scaled_update_values!(GPUsolver,KKT,ui_idx,ui_val,-η2)
-        _scaled_update_values!(GPUsolver,KKT,uti_idx,ui_val,-η2)
-        _scaled_update_values!(GPUsolver,KKT,vi_idx,vi_val,-η2)
-        _scaled_update_values!(GPUsolver,KKT,vti_idx,vi_val,-η2)
+        vu_idx = view(map.vu, rng_i)
+        vut_idx = view(map.vut, rng_i)
+        vut_val = view(cones.vut, rng_i)
+
+        _scaled_update_values!(GPUsolver,KKT,vu_idx,vut_val, -η2)
+        _scaled_update_values!(GPUsolver,KKT,vut_idx,vut_val, -η2)
 
         #set diagonal to η^2*(-1,1) in the extended rows/cols
         _update_value!(KKT,map.D[prow], -η2)
         _update_value!(KKT,map.D[prow+1], η2)
+
+        sparse_idx += 2*len_i
         prow += 2
     end
 
