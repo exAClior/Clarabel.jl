@@ -216,9 +216,9 @@ function update_scaling!(
         n_shift = n_linear
         update_scaling_soc!(s, z, w, λ, η, rng_cones, n_shift, n_soc)
         if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
-            update_scaling_soc_sparse_parallel!(w, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
+            update_scaling_soc_sparse_parallel!(w, η, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
         elseif n_sparse_soc > 0
-            update_scaling_soc_sparse_sequential!(w, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
+            update_scaling_soc_sparse_sequential!(w, η, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
         end
     end
 
@@ -347,49 +347,48 @@ function mul_Hs!(
     return nothing
 end
 
-# function mul_Hs_diag!(
-#     cones::CompositeConeGPU{T},
-#     y::CuVector{T},
-#     x::CuVector{T}
-# ) where {T}
+function mul_Hs_diag!(
+    cones::CompositeConeGPU{T},
+    y::CuVector{T},
+    x::CuVector{T}
+) where {T}
 
-#     n_linear = cones.n_linear
-#     n_soc = cones.n_soc
-#     n_sparse_soc = cones.n_sparse_soc
-#     n_exp = cones.n_exp
-#     n_pow = cones.n_pow
-#     n_psd = cones.n_psd
-#     psd_dim = cones.psd_dim
-#     Hs = cones.Hs
-#     Hspsd = cones.Hspsd
-#     rng_cones = cones.rng_cones
-#     idx_eq = cones.idx_eq
-#     idx_inq = cones.idx_inq
-#     w = cones.w
-#     η = cones.η
+    n_linear = cones.n_linear
+    n_soc = cones.n_soc
+    n_sparse_soc = cones.n_sparse_soc
+    n_exp = cones.n_exp
+    n_pow = cones.n_pow
+    n_psd = cones.n_psd
+    psd_dim = cones.psd_dim
+    Hs = cones.Hs
+    Hspsd = cones.Hspsd
+    rng_cones = cones.rng_cones
+    idx_eq = cones.idx_eq
+    idx_inq = cones.idx_inq
+    w = cones.w
+    η = cones.η
 
-#     mul_Hs_zero!(y, rng_cones, idx_eq)
+    mul_Hs_zero!(y, rng_cones, idx_eq)
     
-#     mul_Hs_nonnegative!(y, x, w, rng_cones, idx_inq)
+    mul_Hs_nonnegative!(y, x, w, rng_cones, idx_inq)
 
-#     if (n_soc - n_sparse_soc) > 0
-#         n_shift = n_linear+n_sparse_soc
-#         mul_Hs_soc!(y, x, w, η, rng_cones, n_shift, n_soc-n_sparse_soc)
-#     end
+    if (n_soc - n_sparse_soc) > 0
+        mul_Hs_dense_soc!(y, x, w, η, rng_cones, n_linear, n_sparse_soc, n_soc)
+    end
 
-#     n_nonsymmetric = n_exp + n_pow
-#     if n_nonsymmetric > 0
-#         n_shift = n_linear+n_soc
-#         mul_Hs_nonsymmetric!(y, Hs, x, rng_cones, n_shift, n_nonsymmetric)
-#     end
+    n_nonsymmetric = n_exp + n_pow
+    if n_nonsymmetric > 0
+        n_shift = n_linear+n_soc
+        mul_Hs_nonsymmetric!(y, Hs, x, rng_cones, n_shift, n_nonsymmetric)
+    end
 
-#     if n_psd > 0
-#         n_shift = n_linear+n_soc+n_exp+n_pow
-#         mul_Hs_psd!(y, x, Hspsd, rng_cones, n_shift, n_psd, psd_dim)
-#     end
+    if n_psd > 0
+        n_shift = n_linear+n_soc+n_exp+n_pow
+        mul_Hs_psd!(y, x, Hspsd, rng_cones, n_shift, n_psd, psd_dim)
+    end
 
-#     return nothing
-# end
+    return nothing
+end
 
 # x = λ ∘ λ for symmetric cone and x = s for asymmetric cones
 function affine_ds!(

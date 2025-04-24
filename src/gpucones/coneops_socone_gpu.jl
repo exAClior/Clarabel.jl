@@ -279,7 +279,8 @@ end
 @inline function _update_scaling_soc_sparse!(
     w::AbstractVector{T},
     u::AbstractVector{T},
-    v::AbstractVector{T}
+    v::AbstractVector{T},
+    η::T
 ) where {T}
 
     #Populate sparse expansion terms if allocated
@@ -300,10 +301,11 @@ end
     v0 = zero(T)
     v1 = sqrt( 2*(2 + wsqinv)/(2*wsq - wsqinv))
     
-    u[1] = u0
-    @views u[2:end] .= u1.*w[2:end]
-    v[1] = v0
-    @views v[2:end] .= v1.*w[2:end]
+    minus_η2 = -η*η 
+    u[1] = minus_η2*u0
+    @views u[2:end] .= minus_η2.*u1.*w[2:end]
+    v[1] = minus_η2*v0
+    @views v[2:end] .= minus_η2.*v1.*w[2:end]
     CUDA.synchronize()
 
     return d
@@ -311,6 +313,7 @@ end
 
 @inline function update_scaling_soc_sparse_sequential!(
     w::AbstractVector{T},
+    η::AbstractVector{T},
     d::AbstractVector{T},
     vut::AbstractVector{T},
     rng_cones::AbstractVector,
@@ -327,13 +330,15 @@ end
         wi = view(w, rng_i)
         vi = view(vut, (startidx+1):(startidx+len_i))
         ui = view(vut, (startidx+len_i+1):(startidx+2*len_i))
+        ηi = η[i]
 
-        d[i] = _update_scaling_soc_sparse!(wi,ui,vi)
+        d[i] = _update_scaling_soc_sparse!(wi,ui,vi,ηi)
     end
 end
 
 @inline function _kernel_update_scaling_soc_sparse_parallel!(
     w::AbstractVector{T},
+    η::AbstractVector{T},
     d::AbstractVector{T},
     vut::AbstractVector{T},
     rng_cones::AbstractVector,
@@ -374,18 +379,20 @@ end
         v0 = zero(T)
         v1 = sqrt( 2*(2 + wsqinv)/(2*wsq - wsqinv))
         
-        ui[1] = u0
-        vi[1] = v0
+        minus_η2 = -η[i]*η[i]
+        ui[1] = minus_η2*u0
+        vi[1] = minus_η2*v0
 
         @inbounds for j in 2:length(ui)
-            ui[j] = u1*wi[j]
-            vi[j] = v1*wi[j]
+            ui[j] = minus_η2*u1*wi[j]
+            vi[j] = minus_η2*v1*wi[j]
         end
     end
 end
 
 @inline function update_scaling_soc_sparse_parallel!(
     w::AbstractVector{T},
+    η::AbstractVector{T},
     d::AbstractVector{T},
     vut::AbstractVector{T},
     rng_cones::AbstractVector,
@@ -394,12 +401,12 @@ end
     n_sparse_soc::Cint
 ) where {T}
 
-    kernel = @cuda launch=false _kernel_update_scaling_soc_sparse_parallel!(w, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
+    kernel = @cuda launch=false _kernel_update_scaling_soc_sparse_parallel!(w, η, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
     config = launch_configuration(kernel.fun)
     threads = min(n_sparse_soc, config.threads)
     blocks = cld(n_sparse_soc, threads)
 
-    CUDA.@sync kernel(w, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc; threads, blocks)
+    CUDA.@sync kernel(w, η, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc; threads, blocks)
 
 end
 
@@ -586,6 +593,29 @@ end
     blocks = cld(n_soc, threads)
 
     CUDA.@sync kernel(y, x, w, η, rng_cones, n_shift, n_soc; threads, blocks)
+end
+
+@inline function mul_Hs_dense_soc!(
+    y::AbstractVector{T},
+    x::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_linear::Cint,
+    n_sparse_soc::Cint,
+    n_soc::Cint
+) where {T}
+
+    n_shift = n_linear + n_sparse_soc
+    n_soc_dense = n_soc - n_sparse_soc
+    η_shift = view(η, (n_sparse_soc+1):n_soc)
+
+    kernel = @cuda launch=false _kernel_mul_Hs_soc!(y, x, w, η_shift, rng_cones, n_shift, n_soc_dense)
+    config = launch_configuration(kernel.fun)
+    threads = min(n_soc, config.threads)
+    blocks = cld(n_soc, threads)
+
+    CUDA.@sync kernel(y, x, w, η_shift, rng_cones, n_shift, n_soc_dense; threads, blocks)
 end
 
 # returns x = λ ∘ λ for the socone

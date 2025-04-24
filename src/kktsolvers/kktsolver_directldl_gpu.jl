@@ -385,6 +385,7 @@ function  _iterative_refinement(
         @. dx += x
         CUDA.synchronize()
         norme = _get_refine_error!(e,b,KKT,dx)
+        # norme = _get_refine_error!(kktsolver,e,b,dx) 
         isfinite(norme) || return is_success = false
 
         improved_ratio = lastnorme/norme
@@ -426,126 +427,64 @@ function _get_refine_error!(
     return norme
 end
 
-# function _get_refine_error!(
-#     kktsolver::GPULDLKKTSolver{T},
-#     e::CuVector{T},
-#     b::CuVector{T},
-#     ξ::CuVector{T}) where {T}
+function _get_refine_error!(
+    kktsolver::GPULDLKKTSolver{T},
+    e::CuVector{T},
+    b::CuVector{T},
+    ξ::CuVector{T}) where {T}
 
-#     m = kktsolver.m 
-#     n = kktsolver.n
-#     p = kktsolver.p
+    m = kktsolver.m 
+    n = kktsolver.n
+    p = kktsolver.p
 
-#     cones = kktsolver.cones
-#     Matvut = cones.Matvut
-#     P = kktsolver.P
-#     A = kktsolver.A
-#     At = kktsolver.At
+    map = kktsolver.map
+    KKT = kktsolver.KKT
+    P = kktsolver.P
+    A = kktsolver.A
+    At = kktsolver.At
 
-#     e1 = view(e, 1:n)
-#     e2 = view(e, (n+1):(n+m))
-#     ξ1 = view(ξ, 1:n)
-#     ξ2 = view(ξ, (n+1):(n+m))
+    cones = kktsolver.cones
+    rng_cones = cones.rng_cones
+    Matvut = cones.Matvut
+    n_linear = cones.n_linear
+    n_sparse_soc = cones.n_sparse_soc
+
+    e1 = view(e, 1:n)
+    e2 = view(e, (n+1):(n+m))
+    ξ1 = view(ξ, 1:n)
+    ξ2 = view(ξ, (n+1):(n+m))
     
-#     # mul!(e,KKT,ξ)    # e = b - Kξ
-#     mul!(e1, At, ξ2)
-#     mul!(e1, P, ξ1, one(T), one(T))
-#     CUDA.@sync @. e2 = 0
-#     Clarabel.mul_Hs_diag!(cones, e2, ξ2)
-#     mul!(e2, A, ξ1, one(T), -one(T))
+    # e = b - KKT*ξ
+    # mul!(e,KKT,ξ)  is split into several matrix-vector operations  
+    mul!(e1, At, ξ2)
+    CUDA.@sync @. e2 = 0
+    Clarabel.mul_Hs_diag!(cones, e2, ξ2)
+    mul!(e1, P, ξ1, one(T), one(T))
+    mul!(e2, A, ξ1, one(T), -one(T))
 
-#     n_sparse_soc = cones.n_sparse_soc
-#     d = cones.d
-#     η = cones.η
+    n_sparse_soc = cones.n_sparse_soc
 
-#     CUDA.@allowscalar if n_sparse_soc > 0
-#         e3 = view(e, (n+m+1):(n+m+p))
-#         ξ3 = view(ξ, (n+m+1):(n+m+p))
-#         @inbounds for i in 1:n_sparse_soc
-#             shift_i = i + cones.n_linear
-#             rng_i = cones.rng_cones[shift_i]
-#             rng_sparse_i = rng_i .- cones.numel_linear
-#             e2i = view(e2, rng_i)
-#             ξ2i = view(ξ2, rng_i)
-#             η2 = η[i]^2
+    CUDA.@allowscalar if n_sparse_soc > 0
+        rng_ext = (n+m+1):(n+m+p)
+        e3 = view(e, rng_ext)
+        ξ3 = view(ξ, rng_ext)
 
-#             e2i[1] -= η2*(d[i] - 1)*ξ2i[1]
-#             CUDA.@sync @. e2i -= η2*ξ2i
-#             e3[2*i-1] = -η2*ξ3[2*i-1]
-#             e3[2*i] = η2*ξ3[2*i]
-#         end
+        rng_sparse_cone = (rng_cones[n_linear+1].start:rng_cones[n_linear+n_sparse_soc].stop) .+ n
+        #Corresponding diagonal part for sparse SOCs 
+        @views @. e[rng_sparse_cone] += KKT.nzVal[map.diag_full[rng_sparse_cone]]*ξ[rng_sparse_cone]
+        @views @. e3 = KKT.nzVal[map.diag_full[rng_ext]]*ξ3
+        CUDA.synchronize()
 
-#         mul!(e2, Matvut', ξ3, one(T), one(T))
-#         mul!(e3, Matvut, ξ2, one(T), one(T))
-#     end
+        #Extended vu parts
+        mul!(e2, Matvut', ξ3, one(T), one(T))
+        mul!(e3, Matvut, ξ2, one(T), one(T))
+    end
 
-#     CUDA.@sync @. e = b - e
-#     # println(e[(n+1):(n+2)])
-#     norme = norm(e,Inf)
+    CUDA.@sync @. e = b - e
+    norme = norm(e,Inf)
 
-#     return norme
-# end
-
-# function _get_refine_error!(
-#     kktsolver::GPULDLKKTSolver{T},
-#     e::CuVector{T},
-#     b::CuVector{T},
-#     ξ::CuVector{T}) where {T}
-
-#     m = kktsolver.m 
-#     n = kktsolver.n
-#     p = kktsolver.p
-
-#     cones = kktsolver.cones
-#     P = kktsolver.P
-#     A = kktsolver.A
-#     At = kktsolver.At
-
-#     e1 = view(e, 1:n)
-#     e2 = view(e, (n+1):(n+m))
-#     ξ1 = view(ξ, 1:n)
-#     ξ2 = view(ξ, (n+1):(n+m))
-    
-#     # mul!(e,KKT,ξ)    # e = b - Kξ
-#     mul!(e1, At, ξ2)
-#     CUDA.@sync @. e2 = 0
-#     Clarabel.mul_Hs_diag!(cones, e2, ξ2)
-#     mul!(e1, P, ξ1, one(T), one(T))
-#     mul!(e2, A, ξ1, one(T), -one(T))
-
-#     n_sparse_soc = cones.n_sparse_soc
-#     d = cones.d
-#     u = cones.u
-#     v = cones.v
-#     η = cones.η
-
-#     CUDA.@allowscalar if n_sparse_soc > 0
-#         e3 = view(e, (n+m+1):(n+m+p))
-#         ξ3 = view(ξ, (n+m+1):(n+m+p))
-#         @inbounds for i in 1:n_sparse_soc
-#             shift_i = i + cones.n_linear
-#             rng_i = cones.rng_cones[shift_i]
-#             rng_sparse_i = rng_i .- cones.numel_linear
-#             ui = view(u, rng_sparse_i)
-#             vi = view(v, rng_sparse_i)
-#             e2i = view(e2, rng_i)
-#             ξ2i = view(ξ2, rng_i)
-#             η2 = η[i]^2
-
-#             e2i[1] -= η2*(d[i] - 1)*ξ2i[1]
-#             CUDA.@sync @. e2i -= η2*(ξ2i + vi*ξ3[2*i-1] + ui*ξ3[2*i])
-#             e3[2*i-1] = -η2*(dot(ξ2i, vi) + ξ3[2*i-1])
-#             e3[2*i] = -η2*(dot(ξ2i, ui) - ξ3[2*i])
-#         end
-#     end
-#     CUDA.synchronize()
-#     @. e = b - e
-#     CUDA.synchronize()
-#     # println(e[(n+1):(n+2)])
-#     norme = norm(e,Inf)
-
-#     return norme
-# end
+    return norme
+end
 
 #Parallel update for KKT of the sparse socs
 function _kernel_update_KKT_sparse_soc_parallel!(
@@ -572,7 +511,7 @@ function _kernel_update_KKT_sparse_soc_parallel!(
         startidx = endidx - 2*length(rng_i) + 1
 
         @inbounds for j in startidx:endidx
-            val = -η2*vutval[j]
+            val = vutval[j]
             nzVal[vu[j]] = val
             nzVal[vut[j]] = val
         end
@@ -631,8 +570,8 @@ end
         vut_idx = view(map.vut, rng_i)
         vut_val = view(cones.vut, rng_i)
 
-        _scaled_update_values!(GPUsolver,KKT,vu_idx,vut_val, -η2)
-        _scaled_update_values!(GPUsolver,KKT,vut_idx,vut_val, -η2)
+        _update_values!(GPUsolver,KKT,vu_idx,vut_val)
+        _update_values!(GPUsolver,KKT,vut_idx,vut_val)
 
         #set diagonal to η^2*(-1,1) in the extended rows/cols
         _update_value!(KKT,map.D[prow], -η2)

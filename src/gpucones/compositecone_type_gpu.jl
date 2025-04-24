@@ -174,23 +174,26 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         rowptr = CuVector{Cint}(undef, 2*n_sparse_soc+1)
         colval = CuVector{Cint}(undef, 2*numel_sparse_soc)
 
-        CUDA.@allowscalar for i in one(Cint):n_sparse_soc
-            shift_i = i + n_linear
-            rng_i = rng_cones[shift_i]
-            len_i = length(rng_i)
-
-            rowptr[2*i] = len_i
-            rowptr[2*i+1] = len_i
-
-            rng_sparse_i = rng_i .- numel_linear
-            startidx = 2*(rng_sparse_i.stop - len_i)
-            colvi = view(colval, (startidx+1):(startidx+len_i))
-            colui = view(colval, (startidx+len_i+1):(startidx+2*len_i))
-            copyto!(colvi, collect(rng_sparse_i))
-            copyto!(colui, collect(rng_sparse_i))
+        CUDA.@allowscalar begin
+            rowptr[1] = one(Cint)
+            for i in one(Cint):n_sparse_soc
+                shift_i = i + n_linear
+                rng_i = rng_cones[shift_i]
+                len_i = Cint(length(rng_i))
+    
+                rowptr[2*i] = len_i
+                rowptr[2*i+1] = len_i
+    
+                rng_sparse_i = rng_i .- numel_linear
+                startidx = 2*(rng_sparse_i.stop - len_i)
+                colvi = view(colval, (startidx+1):(startidx+len_i))
+                colui = view(colval, (startidx+len_i+1):(startidx+2*len_i))
+                copyto!(colvi, collect(rng_i))
+                copyto!(colui, collect(rng_i))
+            end
         end
+
         accumulate!(+, rowptr, rowptr)
-        CUDA.@sync @. rowptr += 1
 
         Matvut = CuSparseMatrixCSR{T}(rowptr, colval, vut, (2*n_sparse_soc, numel))
 
