@@ -9,7 +9,7 @@ const CuVectorView{T} = SubArray{T, 1, CuVector{T}, Tuple{CuVector{Int}}, false}
 mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
 
     # problem dimensions
-    m::Int; n::Int; p::Int;
+    m::Cint; n::Cint; p::Cint;
 
     # Left and right hand sides for solves
     x::CuVector{T}
@@ -53,8 +53,8 @@ mutable struct GPULDLKKTSolver{T} <: AbstractKKTSolver{T}
         A::CuSparseMatrix{T},
         At::CuSparseMatrix{T},
         cones::CompositeConeGPU{T},
-        m::Int64,
-        n::Int64,
+        m::Cint,
+        n::Cint,
         settings::Settings{T}
     ) where {T}
 

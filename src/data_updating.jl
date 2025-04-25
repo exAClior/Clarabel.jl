@@ -149,7 +149,7 @@ function update_A!(
     # overwrite KKT data 
     kkt_update_A!(s.kktsystem,s.data.A)
     kkt_update_At!(s.kktsystem,s.data.At)
-    At = nothing
+    CUDA.unsafe_free!(At)
 
     return nothing
 end 

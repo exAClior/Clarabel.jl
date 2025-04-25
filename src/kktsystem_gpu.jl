@@ -30,7 +30,7 @@ mutable struct DefaultKKTSystemGPU{T} <: AbstractKKTSystem{T}
         ) where {T}
 
         #basic problem dimensions
-        (m, n) = (data.m, data.n)
+        (m, n) = (Cint(data.m), Cint(data.n))
 
         kktsolver = GPULDLKKTSolver{T}(data.P, data.A, data.At, cones, m, n, settings)
 

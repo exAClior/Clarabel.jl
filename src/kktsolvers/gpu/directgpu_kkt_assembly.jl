@@ -100,7 +100,7 @@ function _assemble_full_kkt_matrix(
     _full_kkt_assemble_fill_gpu(rowptr, colval, nzval, P, P_zero, A, At, cones, map)
 
     K = CuSparseMatrixCSR{T}(rowptr, colval, nzval, (m+n+p, m+n+p))
-    P_zero = nothing    #release memory of P_zero
+    CUDA.unsafe_free!(P_zero)   #release memory of P_zero
 
     return K,map
 
@@ -115,7 +115,7 @@ function _full_kkt_assemble_colcounts_gpu(
     cones::CompositeConeGPU{T}
 ) where{T}
 
-    (m,n) = size(A)
+    (m,n) = Cint.(size(A))
 
     #use K.p to hold nnz entries in each
     #column of the KKT matrix
@@ -127,55 +127,7 @@ function _full_kkt_assemble_colcounts_gpu(
     _csr_rowcount_block_gpu(rowptr, A, n)
 
     #Count the Hessian part of KKT
-    n_linear = cones.n_linear
-    n_soc = cones.n_soc
-    n_sparse_soc = cones.n_sparse_soc
-    n_exp = cones.n_exp
-    n_pow = cones.n_pow
-    n_psd = cones.n_psd
-    rng_cones = cones.rng_cones
-
-    #Count the diagonal Hessian parts
-    CUDA.@allowscalar begin
-        for i in cones.idx_eq
-            rng_cone_i = rng_cones[i] .+ (n + 1) 
-            @views rowptr[rng_cone_i] .+= 1
-        end
-        for i in cones.idx_inq
-            rng_cone_i = rng_cones[i] .+ (n + 1) 
-            @views rowptr[rng_cone_i] .+= 1
-        end
-        #Assume the sparse socs is after linear cones and before dense socs
-        @inbounds for i in (n_linear+1):(n_linear+n_sparse_soc)
-            rng_cone_i = rng_cones[i] .+ (n + 1) 
-            @views rowptr[rng_cone_i] .+= 1
-        end            
-    end
-    CUDA.synchronize()
-
-    #Count the additional sparse mapping for SOCs
-    # track the next sparse row to fill 
-    prow = m + n + 1 #next sparse row to fill
-    
-    n_sparse_soc = cones.n_sparse_soc
-    CUDA.@allowscalar for i in (n_linear+1):(n_linear+n_sparse_soc)
-    
-        #add sparse expansions rows for sparse socs  
-        rng_cone_i = rng_cones[i] .+ (n + 1)
-        rowptr[prow+1] = length(rng_cone_i) + 1
-        rowptr[prow+2] = length(rng_cone_i) + 1
-        prow += 2 #next sparse row to fill 
-
-        #add sparse expansions columns for sparse cones 
-        @views rowptr[rng_cone_i] .+= 2
-    end
-    CUDA.synchronize()
-    
-    #Count the remaining dense block
-    n_rec = (n_soc - n_sparse_soc) + n_exp + n_pow + n_psd
-    if (n_rec > 0)
-        _csr_rowcount_dense_full_gpu(rowptr, rng_cones, Cint(n), n_linear+n_sparse_soc, n_rec)
-    end
+    _csr_rowcount_Hessian_gpu(cones, rowptr, m, n)
 
     return nothing
 end
@@ -193,105 +145,18 @@ function _full_kkt_assemble_fill_gpu(
     map::GPUDataMap
 ) where{T}
 
-    (m,n) = size(A)
-    n = Cint(n)
+    (m,n) = Cint.(size(A))
 
     #cumsum total entries to convert to K.p
     _csr_rowcount_to_rowptr_gpu(rowptr)
 
     #filling [P At;A 0] parts
     _csr_fill_P_diag_full_gpu(rowptr, colval, nzval, P, P_zero, map.P)
-    _csr_fill_block_gpu(rowptr, colval, nzval, At, map.At, one(Cint), Cint(n+1))
-    _csr_fill_block_gpu(rowptr, colval, nzval, A, map.A, Cint(n+1), one(Cint))
+    _csr_fill_block_gpu(rowptr, colval, nzval, At, map.At, one(Cint), n+one(Cint))
+    _csr_fill_block_gpu(rowptr, colval, nzval, A, map.A, n+one(Cint), one(Cint))
 
     #filling Hessian blocks for cones
-    rng_cones = cones.rng_cones
-    rng_blocks = cones.rng_blocks
-    CUDA.@allowscalar begin
-        for i in cones.idx_eq
-            row = first(rng_cones[i]) + n
-            block = view(map.Hsblocks,rng_blocks[i])
-            _csr_fill_diag_gpu(rowptr, colval, nzval, block, row, Cint(length(block)))
-        end
-        for i in cones.idx_inq
-            row = first(rng_cones[i]) + n
-            block = view(map.Hsblocks,rng_blocks[i])
-            _csr_fill_diag_gpu(rowptr, colval, nzval, block, row, Cint(length(block)))
-        end
-        #Assume the sparse socs is after linear cones and before dense socs
-        n_linear = cones.n_linear
-        n_sparse_soc = cones.n_sparse_soc
-        @inbounds for i in (n_linear+1):(n_linear+n_sparse_soc)
-            row = first(rng_cones[i]) + n
-            block = view(map.Hsblocks,rng_blocks[i])
-            _csr_fill_diag_gpu(rowptr, colval, nzval, block, row, Cint(length(block)))
-        end
-    end
-    CUDA.synchronize()
-
-    # Initializing additional rows (columns) for sparse second-order cones
-    # track the next sparse row to fill
-    prow = Cint(m + n + 1) #next sparse row to fill
-
-    n_sparse_soc = cones.n_sparse_soc
-    n_linear = cones.n_linear
-    sparse_idx = 0
-
-    CUDA.@allowscalar for i in 1:n_sparse_soc
-
-        #add sparse expansions columns for sparse cones 
-        rng_cone_i = rng_cones[n_linear + i] .+ n
-        len_i = length(rng_cone_i)
-        rng_vec_vt = (sparse_idx+1):(sparse_idx+len_i)
-        rng_vec_ut = (sparse_idx+len_i+1):(sparse_idx+2*len_i)
-
-        rowptr_i = view(rowptr, rng_cone_i)
-        #regard each vi ui sequentially
-        @views @. map.vu[rng_vec_vt] = rowptr_i
-        @views @. colval[rowptr_i] = prow
-        @views @. rowptr_i += 1
-        CUDA.synchronize()
-
-        @views @. map.vu[rng_vec_ut] = rowptr_i
-        @views @. colval[rowptr_i] = prow + 1
-        @views @. rowptr_i += 1
-        CUDA.synchronize()
-
-        #add sparse expansions rows for sparse cones 
-        start_col = Cint(rng_cone_i.start - 1)
-
-        start_v = Cint(rowptr[prow] - 1)
-        start_u = Cint(rowptr[prow+1] - 1)
-        vti = view(map.vut, rng_vec_vt)
-        uti = view(map.vut, rng_vec_ut)
-        _csr_fill_sparse_uv_gpu(vti, uti, colval, start_col, start_v, start_u)
-        rowptr[prow] += len_i
-        rowptr[prow+1] += len_i
-
-        sparse_idx += 2*len_i
-        prow += 2 #next sparse soc to fill 
-    end
-
-    if n_sparse_soc > 0
-        #final settings for map.D 
-        rng_D = (m + n + 1):(m + n + 2*n_sparse_soc)
-        rowptr_D = view(rowptr, rng_D)
-        CUDA.@sync @. map.D = rowptr_D
-        _fill_range_gpu(map.D, colval, Cint(m+n))
-        CUDA.@sync @. rowptr_D += 1
-
-        #fill in nzval with 0s
-        @views @. nzval[map.vu] = 0.
-        @views @. nzval[map.vut] = 0.
-        @views @. nzval[map.D] = 0.
-    end
-    CUDA.synchronize()
-
-    n_linear = cones.n_linear
-    n_rec = (cones.n_soc - n_sparse_soc) + cones.n_exp + cones.n_pow + cones.n_psd
-    if (n_rec > 0)
-        _csr_fill_dense_full_gpu(rowptr, colval, nzval, map.Hsblocks, rng_cones, rng_blocks, n_linear+n_sparse_soc, Cint(n), n_rec)
-    end
+    _csr_fill_Hessian_gpu(cones, map, rowptr, colval, nzval, m, n)
 
     #backshift the colptrs to recover K.p again
     _kkt_backshift_colptrs_gpu(rowptr)

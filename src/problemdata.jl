@@ -101,15 +101,6 @@ function DefaultProblemDataGPU{T}(
 
 	@assert(settings.direct_solve_method in gpu_solver_list)
 
-	# # Preprocess large second-order cones
-	# size_soc = SOC_NO_EXPANSION_MAX_SIZE
-	# num_socs, last_sizes, soc_indices, soc_starts = expand_soc(cones,size_soc)
-
-	# if (length(num_socs) > 0)
-	# 	P_new,q_new,A_new,b_new,cones_new =  augment_A_b_soc(cones,P,q,A,b,size_soc,num_socs, last_sizes, soc_indices, soc_starts)
-	# 	(P, q, A, b, cones) = (P_new, q_new, A_new, b_new, cones_new)
-	# end
-
 	# now make sure we have a clean copy of everything if we
 	#haven't made one already.   Necessary since we will scale
 	# scale the internal copy and don't want to step on the user
