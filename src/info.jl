@@ -243,13 +243,17 @@ function info_reset!(
     info::DefaultInfo{T},
     timers::TimerOutput
 ) where {T}
+    #Reset the setup time when the problem is solved again
+    if !iszero(info.solve_time)
+        reset_timer!(timers["setup!"])
+    end
 
     info.status     = UNSOLVED
-    info.iterations = 0
-    info.solve_time = 0
-    info.total_time = info.setup_time
+    info.iterations = zero(T)
+    info.solve_time = zero(T)
+    info.total_time = zero(T)
 
-    #reset the solve! timer, but keep the setup!
+    #reset the solve! timer
     reset_timer!(timers["solve!"])
 
     return nothing
