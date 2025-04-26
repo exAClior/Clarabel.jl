@@ -180,7 +180,7 @@ function info_check_termination!(
         if settings.max_iter  == info.iterations
             info.status = MAX_ITERATIONS
 
-        elseif info.solve_time > settings.time_limit
+        elseif info.total_time > settings.time_limit
             info.status = MAX_TIME
         end
     end
@@ -247,6 +247,7 @@ function info_reset!(
     info.status     = UNSOLVED
     info.iterations = 0
     info.solve_time = 0
+    info.total_time = info.setup_time
 
     #reset the solve! timer, but keep the setup!
     reset_timer!(timers["solve!"])
@@ -260,7 +261,9 @@ function info_get_solve_time!(
     timers::TimerOutput
 ) where {T}
     #TimerOutputs reports in nanoseconds
-    info.solve_time = TimerOutputs.tottime(timers)*1e-9
+    info.setup_time = TimerOutputs.tottime(timers["setup!"])*1e-9
+    info.solve_time = TimerOutputs.tottime(timers["solve!"])*1e-9
+    info.total_time = TimerOutputs.tottime(timers)*1e-9
     return nothing
 end
 
