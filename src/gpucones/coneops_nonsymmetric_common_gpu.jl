@@ -29,7 +29,7 @@ function _kernel_mul_Hs_nonsymmetric!(
         # update both gradient and Hessian for function f*(z) at the point z
         shift_i = i + n_shift
         rng_i = rng_cones[shift_i]
-        @views Hsi = Hs[i,:,:]
+        @views Hsi = Hs[:,:,i]
         @views yi = y[rng_i]
         @views xi = x[rng_i]
 
@@ -115,16 +115,16 @@ end
     # compute zt,st,μt locally
     # NB: zt,st have different sign convention wrt Mosek paper
     zt = gradient_primal_exp(s)
-    dot_sz = _dot_xy_gpu(z,s,1:3)
+    dot_sz = _dot_xy_gpu_3(z,s)
     μ = dot_sz/3
-    μt = _dot_xy_gpu(zt,st,1:3)/3
+    μt = _dot_xy_gpu_3(zt,st)/3
 
     δz = tmp
     @inbounds for i in eachindex(st)
         δs[i] = s[i] + μ*st[i]
         δz[i] = z[i] + μ*zt[i]
     end    
-    dot_δsz = _dot_xy_gpu(δs,δz,1:3)
+    dot_δsz = _dot_xy_gpu_3(δs,δz)
 
     de1 = μ*μt-1
     de2 = _dot_xHy_gpu(zt,H_dual,zt) - 3*μt*μt
@@ -143,7 +143,7 @@ end
 
         # Hs as a workspace
         # copyto!(Hs,H_dual)
-        @inbounds for i = 1:length(Hs)
+        @inbounds for i = 1:9
             Hs[i] = H_dual[i]
         end
         @inbounds for i = 1:3
@@ -205,16 +205,16 @@ end
     # compute zt,st,μt locally
     # NB: zt,st have different sign convention wrt Mosek paper
     zt = gradient_primal_pow(s,α)
-    dot_sz = _dot_xy_gpu(z,s,1:3)
+    dot_sz = _dot_xy_gpu_3(z,s)
     μ = dot_sz/3
-    μt = _dot_xy_gpu(zt,st,1:3)/3
+    μt = _dot_xy_gpu_3(zt,st)/3
 
     δz = tmp
-    @inbounds for i in eachindex(st)
+    @inbounds for i in 1:3
         δs[i] = s[i] + μ*st[i]
         δz[i] = z[i] + μ*zt[i]
     end    
-    dot_δsz = _dot_xy_gpu(δs,δz,1:3)
+    dot_δsz = _dot_xy_gpu_3(δs,δz)
 
     de1 = μ*μt-1
     de2 = _dot_xHy_gpu(zt,H_dual,zt) - 3*μt*μt
@@ -233,7 +233,7 @@ end
 
         # Hs as a workspace
         # copyto!(Hs,H_dual)
-        @inbounds for i = 1:length(Hs)
+        @inbounds for i = 1:9
             Hs[i] = H_dual[i]
         end
         @inbounds for i = 1:3
@@ -306,7 +306,7 @@ end
 #     return x
 # end
 
-@inline function _dot_xHy_gpu(x::AbstractVector{T},H::AbstractArray{T},y::AbstractVector{T}) where {T} 
+@inline function _dot_xHy_gpu(x::Union{AbstractVector{T}, NTuple{3,T}}, H::AbstractArray{T}, y::Union{AbstractVector{T}, NTuple{3,T}}) where {T} 
     val = zero(T)
     @inbounds for j in 1:3
         val += x[j]*(H[j,1]*y[1]+H[j,2]*y[2]+H[j,3]*y[3])
@@ -334,4 +334,10 @@ end
         x[j] /= normx
     end     
     return nothing
+end 
+
+@inline function _dot_xy_gpu_3(x::Union{AbstractVector{T}, NTuple{3,T}}, y::Union{AbstractVector{T}, NTuple{3,T}}) where {T} 
+    val = x[1]*y[1] + x[2]*y[2] + x[3]*y[3]
+    
+    return val
 end 

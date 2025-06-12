@@ -228,9 +228,8 @@ function variables_combined_step_rhs!(
 
     dotσμ = σ*μ
 
-    CUDA.@sync @. d.x  = (one(T) - σ)*r.rx
-       d.τ  = (one(T) - σ)*r.rτ
-       d.κ  = - dotσμ + m * step.τ * step.κ + variables.τ * variables.κ
+    d.τ  = (one(T) - σ)*r.rτ
+    d.κ  = - dotσμ + m * step.τ * step.κ + variables.τ * variables.κ
 
     # ds is different for symmetric and asymmetric cones:
     # Symmetric cones: d.s = λ ◦ λ + W⁻¹Δs ∘ WΔz − σμe
@@ -241,17 +240,20 @@ function variables_combined_step_rhs!(
     # vector operation (since it amounts to M*z'*s), but it 
     # doesn't happen very often 
     if (m != one(T))
-        CUDA.@sync @. step.z *= m
+        @. step.z *= m
     end
+    @. d.x  = (one(T) - σ)*r.rx
+    CUDA.synchronize()
 
     combined_ds_shift!(cones,d.z,step.z,step.s,variables.z,dotσμ)
 
     #We are relying on d.s = affine_ds already here
-    CUDA.@sync @. d.s += d.z
+    @. d.s += d.z
 
     # now we copy the scaled res for rz and d.z is no longer work
-    CUDA.@sync @. d.z = (1 - σ)*r.rz
-
+    @. d.z = (1 - σ)*r.rz
+    CUDA.synchronize()
+    
     return nothing
 end
 

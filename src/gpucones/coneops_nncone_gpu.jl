@@ -47,7 +47,7 @@ end
 ) where{T}
 
     CUDA.@allowscalar begin
-        for i in idx_inq
+        @inbounds for i in idx_inq
             rng_cone_i = rng_cones[i]
             @views @. z[rng_cone_i] += α 
         end
@@ -64,7 +64,7 @@ end
 ) where{T}
 
     CUDA.@allowscalar begin
-        for i in idx_inq
+        @inbounds for i in idx_inq
             rng_cone_i = rng_cones[i]
             @views @. z[rng_cone_i] = one(T)
             @views @. s[rng_cone_i] = one(T)
@@ -81,7 +81,7 @@ end
 ) where {T}
 
     CUDA.@allowscalar begin
-        for i in idx_inq
+        @inbounds for i in idx_inq
             @views @. w[rng_cones[i]] = one(T)
         end
     end
@@ -97,7 +97,7 @@ end
     idx_inq::Vector{Cint}    
 ) where {T}
 
-    CUDA.@allowscalar for i in idx_inq
+    CUDA.@allowscalar @inbounds for i in idx_inq
         rng_cone_i = rng_cones[i]
         @views  si = s[rng_cone_i]
         @views  zi = z[rng_cone_i]
@@ -118,7 +118,7 @@ end
     #this block is diagonal, and we expect here
     #to receive only the diagonal elements to fill
     CUDA.@allowscalar begin
-        for i in idx_inq
+        @inbounds for i in idx_inq
             @views wi = w[rng_cones[i]]
             @views @. Hsblocks[rng_blocks[i]] = wi^2
         end
@@ -137,7 +137,7 @@ end
 
     #NB : seemingly sensitive to order of multiplication
     CUDA.@allowscalar begin
-        for i in idx_inq
+        @inbounds for i in idx_inq
             @views wi = w[rng_cones[i]]
             @views xi = x[rng_cones[i]]
             @views yi = y[rng_cones[i]]
@@ -156,7 +156,7 @@ end
 ) where {T}
 
     CUDA.@allowscalar begin
-        for i in idx_inq
+        @inbounds for i in idx_inq
             @views @. ds[rng_cones[i]] = λ[rng_cones[i]]^2
         end
     end
@@ -167,10 +167,9 @@ end
     shift::AbstractVector{T},
     step_z::AbstractVector{T},
     step_s::AbstractVector{T},
-    w::AbstractVector{T},
     σμ::T,
     rng_cones::AbstractVector,
-    idx_inq::Vector{Cint} 
+    idx_inq::Vector{Cint}
 ) where {T}
 
     # The shift must be assembled carefully if we want to be economical with
@@ -181,28 +180,17 @@ end
     # we need a temporary variable to assign #Δz <= WΔz and Δs <= W⁻¹Δs
 
     CUDA.@allowscalar begin
-        for i in idx_inq
+        @inbounds for i in idx_inq
+            rng_i = rng_cones[i]
             @views shift_i = shift[rng_cones[i]]
             step_zi = step_z[rng_cones[i]]
             step_si = step_s[rng_cones[i]]
-            wi = w[rng_cones[i]]
-
-            #shift vector used as workspace for a few steps 
-            tmp = shift_i              
-
-                #Δz <- WΔz
-            @. tmp = step_zi           
-            @. step_zi = tmp*wi
-
-            #Δs <- W⁻¹Δs
-            @. tmp = step_si           
-            @. step_si = tmp/wi
 
             #shift = W⁻¹Δs ∘ WΔz - σμe
             @. shift_i = step_si*step_zi - σμ    
         end
     end    
-    CUDA.synchronize()               
+    CUDA.synchronize()
 end
 
 @inline function Δs_from_Δz_offset_nonnegative!(
@@ -213,7 +201,7 @@ end
     idx_inq::Vector{Cint} 
 ) where {T}
     CUDA.@allowscalar begin
-        for i in idx_inq
+        @inbounds for i in idx_inq
             @views @. out[rng_cones[i]] = ds[rng_cones[i]] / z[rng_cones[i]]
         end
     end
@@ -254,7 +242,7 @@ end
 ) where {T}
 
     CUDA.@allowscalar begin
-        for i in idx_inq
+        @inbounds for i in idx_inq
             len_nn = Cint(length(rng_cones[i]))
             rng_cone_i = rng_cones[i]
             @views dzi = dz[rng_cone_i]
@@ -268,12 +256,10 @@ end
             threads = min(len_nn, config.threads)
             blocks = cld(len_nn, threads)
         
-            CUDA.@sync kernel(dzi, dsi, zi, si, αi, len_nn, αmax; threads, blocks)
-            αmax = min(αmax,minimum(αi))
+            kernel(dzi, dsi, zi, si, αi, len_nn, αmax; threads, blocks)
         end
     end
-
-    return αmax
+    CUDA.synchronize()
 end
 
 function _kernel_compute_barrier_nonnegative(
@@ -307,12 +293,14 @@ end
 ) where {T}
 
     barrier = zero(T)
-    CUDA.@allowscalar for i in idx_inq
-        rng_cone_i = rng_cones[i]
-        @views worki = work[rng_cone_i]
-        @views @. worki = -logsafe((s[rng_cone_i] + α*ds[rng_cone_i])*(z[rng_cone_i] + α*dz[rng_cone_i]))
-        CUDA.synchronize()
-        barrier += sum(worki)
+    CUDA.@allowscalar begin
+        @inbounds for i in idx_inq
+            rng_cone_i = rng_cones[i]
+            @views worki = work[rng_cone_i]
+            @views @. worki = -logsafe((s[rng_cone_i] + α*ds[rng_cone_i])*(z[rng_cone_i] + α*dz[rng_cone_i]))
+            CUDA.synchronize()
+            barrier += sum(worki)
+        end
     end
 
     return barrier

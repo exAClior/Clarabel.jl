@@ -192,6 +192,7 @@ function update_scaling!(
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    n_sparse_soc = cones.n_sparse_soc
     n_exp = cones.n_exp
     n_pow = cones.n_pow
     n_psd = cones.n_psd
@@ -205,35 +206,42 @@ function update_scaling!(
     λ = cones.λ
     η = cones.η
 
-    n_sparse_soc = cones.n_sparse_soc
     d = cones.d
     vut = cones.vut
     numel_linear = cones.numel_linear
     
     update_scaling_nonnegative!(s, z, w, λ, rng_cones, idx_inq)
 
+    n_shift = n_linear
+    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        update_scaling_soc_sequential!(s, z, w, λ, η, rng_cones, n_shift, n_sparse_soc)
+        n_shift += n_sparse_soc
+        n_soc -= n_sparse_soc
+    end
+
     if n_soc > 0
-        n_shift = n_linear
         update_scaling_soc!(s, z, w, λ, η, rng_cones, n_shift, n_soc)
-        if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
-            update_scaling_soc_sparse_parallel!(w, η, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
-        elseif n_sparse_soc > 0
-            update_scaling_soc_sparse_sequential!(w, η, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
-        end
+        n_shift += n_soc
+    end  
+
+    # off-diagonal update
+    if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
+        update_scaling_soc_sparse_parallel!(w, η, d, vut, rng_cones, numel_linear, n_linear, n_sparse_soc)
+    else
+        update_scaling_soc_sparse_sequential!(w, η, d, vut, rng_cones, numel_linear, n_linear, n_sparse_soc)
     end
 
     if n_exp > 0
-        n_shift = n_linear+n_soc
         update_scaling_exp!(s, z, grad, Hs, H_dual, rng_cones, μ, scaling_strategy, n_shift, n_exp)
+        n_shift += n_exp
     end
 
     if n_pow > 0
-        n_shift = n_linear+n_soc+n_exp
         update_scaling_pow!(s, z, grad, Hs, H_dual, αp, rng_cones, μ, scaling_strategy, n_shift, n_exp, n_pow)
+        n_shift += n_pow
     end
 
     if n_psd > 0
-        n_shift = n_linear+n_soc+n_exp+n_pow
         update_scaling_psd!(cones.chol1, cones.chol2, z, s, cones.workmat1, cones.λpsd, cones.Λisqrt, cones.R, cones.Rinv, cones.Hspsd, rng_cones, n_shift, n_psd)
     end
 
@@ -248,6 +256,7 @@ function get_Hs!(
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    n_dense_soc = cones.n_dense_soc
     n_exp = cones.n_exp
     n_pow = cones.n_pow
     n_psd = cones.n_psd
@@ -275,7 +284,7 @@ function get_Hs!(
         elseif n_sparse_soc > 0
             get_Hs_soc_sparse_sequential!(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc)
         end
-        n_dense_soc = n_soc - n_sparse_soc
+
         if n_dense_soc > 0 
             get_Hs_soc_dense!(Hsblocks, w, η, rng_cones, rng_blocks, n_shift + n_sparse_soc, n_sparse_soc, n_dense_soc)
         end
@@ -312,6 +321,7 @@ function mul_Hs!(
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    n_sparse_soc = cones.n_sparse_soc
     n_exp = cones.n_exp
     n_pow = cones.n_pow
     n_psd = cones.n_psd
@@ -328,19 +338,24 @@ function mul_Hs!(
     
     mul_Hs_nonnegative!(y, x, w, rng_cones, idx_inq)
 
+    n_shift = n_linear
+    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        mul_Hs_soc_sequential!(y, x, w, η, rng_cones, n_shift, n_sparse_soc)
+        n_shift += n_sparse_soc
+        n_soc -= n_sparse_soc
+    end
     if n_soc > 0
-        n_shift = n_linear
         mul_Hs_soc!(y, x, w, η, rng_cones, n_shift, n_soc)
+        n_shift += n_soc
     end
 
     n_nonsymmetric = n_exp + n_pow
     if n_nonsymmetric > 0
-        n_shift = n_linear+n_soc
         mul_Hs_nonsymmetric!(y, Hs, x, rng_cones, n_shift, n_nonsymmetric)
+        n_shift += n_nonsymmetric
     end
 
     if n_psd > 0
-        n_shift = n_linear+n_soc+n_exp+n_pow
         mul_Hs_psd!(y, x, Hspsd, rng_cones, n_shift, n_psd, psd_dim)
     end
 
@@ -399,6 +414,7 @@ function affine_ds!(
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    n_sparse_soc = cones.n_sparse_soc
     n_exp = cones.n_exp
     n_pow = cones.n_pow
     n_psd = cones.n_psd
@@ -413,20 +429,26 @@ function affine_ds!(
 
     affine_ds_nonnegative!(ds, λ, rng_cones, idx_inq)
 
+    n_shift = n_linear
+    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        affine_ds_soc_sequential!(ds, λ, rng_cones, n_shift, n_sparse_soc)
+        n_shift += n_sparse_soc
+        n_soc -= n_sparse_soc
+    end
+
     if n_soc > 0
-        n_shift = n_linear
         affine_ds_soc!(ds, λ, rng_cones, n_shift, n_soc)
+        n_shift += n_soc
     end
 
     #update nonsymmetric cones
     n_nonsymmetric = n_exp + n_pow
     if n_nonsymmetric > 0
-        n_shift = n_linear + n_soc
         affine_ds_nonsymmetric!(ds, s, rng_cones, n_shift, n_nonsymmetric)
+        n_shift += n_nonsymmetric
     end
 
     if n_psd > 0
-        n_shift = n_linear + n_soc + n_exp + n_pow
         affine_ds_psd_gpu!(ds,λpsd,rng_cones,psd_dim,n_shift,n_psd)
     end
 
@@ -444,6 +466,7 @@ function combined_ds_shift!(
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    n_sparse_soc = cones.n_sparse_soc
     n_exp = cones.n_exp
     n_pow = cones.n_pow
     n_psd = cones.n_psd
@@ -455,30 +478,33 @@ function combined_ds_shift!(
     idx_inq = cones.idx_inq
     w = cones.w
     η = cones.η
-
-    CUDA.synchronize()
     
     combined_ds_shift_zero!(shift, rng_cones, idx_eq)
     
-    combined_ds_shift_nonnegative!(shift, step_z, step_s, w, σμ, rng_cones, idx_inq)
+    combined_ds_shift_nonnegative!(shift, step_z, step_s, σμ, rng_cones, idx_inq)
 
+    n_shift = n_linear
+    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        combined_ds_shift_soc_sequential!(shift, step_z, step_s, w, η, rng_cones, n_shift, n_sparse_soc, σμ)
+        n_shift += n_sparse_soc
+        n_soc -= n_sparse_soc
+    end
     if n_soc > 0
-        n_shift = n_linear
         combined_ds_shift_soc!(shift, step_z, step_s, w, η, rng_cones, n_shift, n_soc, σμ)
+        n_shift += n_soc
     end
 
     if n_exp > 0
-        n_shift = n_linear+n_soc
         combined_ds_shift_exp!(shift, step_z, step_s, z, grad, H_dual, rng_cones, σμ, n_shift, n_exp)
+        n_shift += n_exp
     end
 
     if n_pow > 0
-        n_shift = n_linear+n_soc+n_exp
         combined_ds_shift_pow!(shift, step_z, step_s, z, grad, H_dual, αp, rng_cones, σμ, n_shift, n_exp, n_pow)
+        n_shift += n_pow
     end
     
     if n_psd > 0 
-        n_shift = n_linear+n_soc+n_exp+n_pow
         combined_ds_shift_psd!(cones,shift,step_z,step_s,n_shift,n_psd,σμ)
     end
 
@@ -496,6 +522,7 @@ function Δs_from_Δz_offset!(
 
     n_linear = cones.n_linear
     n_soc = cones.n_soc
+    n_sparse_soc = cones.n_sparse_soc
     n_exp = cones.n_exp
     n_pow = cones.n_pow
     n_psd = cones.n_psd
@@ -510,19 +537,25 @@ function Δs_from_Δz_offset!(
     
     Δs_from_Δz_offset_nonnegative!(out, ds, z, rng_cones, idx_inq)
 
+    n_shift = n_linear
+    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        Δs_from_Δz_offset_soc_sequential!(out, ds, z, w, λ, η, rng_cones, n_shift, n_sparse_soc)
+        n_shift += n_sparse_soc
+        n_soc -= n_sparse_soc
+    end
+
     if n_soc > 0
-        n_shift = n_linear
         Δs_from_Δz_offset_soc!(out, ds, z, w, λ, η, rng_cones, n_shift, n_soc)
+        n_shift += n_soc
     end
 
     n_nonsymmetric = n_exp+n_pow
     if n_nonsymmetric > 0
-        n_shift = n_linear + n_soc
         Δs_from_Δz_offset_nonsymmetric!(out, ds, rng_cones, n_shift, n_nonsymmetric)
+        n_shift += n_nonsymmetric
     end
 
     if n_psd > 0
-        n_shift = n_linear+n_soc+n_exp+n_pow
         Δs_from_Δz_offset_psd!(cones, out, ds, work, n_shift, n_psd)
     end
 
@@ -541,7 +574,9 @@ function step_length(
 ) where {T}
 
     n_linear = cones.n_linear
+    numel_linear = cones.numel_linear
     n_soc = cones.n_soc
+    n_sparse_soc = cones.n_sparse_soc
     n_exp = cones.n_exp
     n_pow = cones.n_pow
     n_psd = cones.n_psd
@@ -555,20 +590,29 @@ function step_length(
     Rinv   = cones.Rinv
     (workmat1, workmat2, workmat3) = (cones.workmat1, cones.workmat2, cones.workmat3)
 
-    CUDA.@sync @. α = αmax          #Initialize step size
+    @. α = αmax          #Initialize step size
 
-    αmax = step_length_nonnegative(dz, ds, z, s, α, αmax, rng_cones, idx_inq)
+    step_length_nonnegative(dz, ds, z, s, α, αmax, rng_cones, idx_inq)
+    @views αmax = min(αmax, minimum(α[1:numel_linear]))
 
-    if n_soc > 0
-        n_shift = n_linear
-        αmax = step_length_soc(dz, ds, z, s, α, αmax, rng_cones, n_shift, n_soc)
+    n_shift = n_linear
+    n_parallel_soc = n_soc
+    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        αmax = step_length_soc_sequential(dz, ds, z, s, αmax, rng_cones, n_shift, n_sparse_soc)
+        n_shift += n_sparse_soc
+        n_parallel_soc -= n_sparse_soc
+    end
+
+    if n_parallel_soc > 0
+        αmax = step_length_soc(dz, ds, z, s, α, αmax, rng_cones, n_shift, n_parallel_soc)
         if αmax < 0
             throw(DomainError("starting point of line search not in SOC"))
         end
     end
 
+    n_nonsymmetric = n_exp+n_pow
     if n_psd > 0
-        n_shift = n_linear+n_soc+n_exp+n_pow
+        n_shift = n_linear+n_soc+n_nonsymmetric
         αmax = step_length_psd(dz, ds, Λisqrt, d, Rx, Rinv, workmat1, workmat2, workmat3, αmax, rng_cones, n_shift, n_psd)
         if αmax < 0
             throw(DomainError("starting point of line search not in positive semidefinite cones"))
@@ -579,7 +623,7 @@ function step_length(
     αmin = settings.min_terminate_step_length
     #if we have any nonsymmetric cones, then back off from full steps slightly
     #so that centrality checks and logarithms don't fail right at the boundaries
-    if(n_exp + n_pow > 0)
+    if(n_nonsymmetric > 0)
         αmax = min(αmax,settings.max_step_fraction)
     end
   

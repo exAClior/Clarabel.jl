@@ -190,6 +190,61 @@ end
     end
 end
 
+
+@inline function update_scaling_soc_sequential!(
+    s::AbstractVector{T},
+    z::AbstractVector{T},
+    w::AbstractVector{T},
+    λ::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+        @views zi = z[rng_i] 
+        @views si = s[rng_i] 
+        @views wi = w[rng_i] 
+        @views λi = λ[rng_i]
+
+        #first calculate the scaled vector w
+        @views zscale = zi[1]*zi[1] - dot(zi[2:end], zi[2:end])
+        zscale = zscale > 0.0 ? sqrt(zscale) : zero(T)
+        @views sscale = si[1]*si[1] - dot(si[2:end], si[2:end])
+        sscale = sscale > 0.0 ? sqrt(sscale) : zero(T)
+
+        #the leading scalar term for W^TW
+        η[i] = sqrt(sscale/zscale)
+
+        # construct w and normalize
+        CUDA.@sync @. w[rng_i] = s[rng_i]/(sscale) - z[rng_i]/(zscale)
+        wi[1]  += 2*zi[1]/(zscale)
+    
+        @views wscale = wi[1]*wi[1] - dot(wi[2:end], wi[2:end])
+        wscale = wscale > 0.0 ? sqrt(wscale) : zero(T)
+        CUDA.@sync wi ./= wscale
+
+        #try to force badly scaled w to come out normalized
+        @views w1sq = dot(wi[2:end], wi[2:end])
+        wi[1] = sqrt(1 + w1sq)
+
+        #Compute the scaling point λ.   Should satisfy λ = Wz = W^{-T}s
+        γi = 0.5 * wscale
+        λi[1] = γi 
+
+        coef = inv(si[1]/sscale + zi[1]/zscale + 2*γi)
+        coef2 = sqrt(sscale*zscale)*coef
+        c1 = ((γi + zi[1]/zscale)/sscale)
+        c2 = ((γi + si[1]/sscale)/zscale)
+
+        CUDA.@sync @. λi[2:end] = coef2*(c1*si[2:end] +c2*zi[2:end])
+        λi[1] *= sqrt(sscale*zscale)
+    end
+end
+
 function _kernel_update_scaling_soc!(
     s::AbstractVector{T},
     z::AbstractVector{T},
@@ -542,6 +597,33 @@ end
 end
 
 # compute the product y = WᵀWx
+@inline function mul_Hs_soc_sequential!(
+    y::AbstractVector{T},
+    x::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+        yi = view(y, rng_i)
+        wi = view(w, rng_i)
+        xi = view(x, rng_i)
+
+        # y = = H^{-1}x = W^TWx
+        # where H^{-1} = \eta^{2} (2*ww^T - J)
+        @. yi= xi
+        c = 2*dot(wi,xi)
+        yi[1] = -xi[1]
+        η2 = η[i]^2
+        CUDA.@sync @. yi = η2*(yi + c*wi)
+    end
+end
+
 function _kernel_mul_Hs_soc!(
     y::AbstractVector{T},
     x::AbstractVector{T},
@@ -619,20 +701,41 @@ end
 end
 
 # returns x = λ ∘ λ for the socone
+@inline function affine_ds_soc_sequential!(
+    ds::AbstractVector{T},
+    λ::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_cone_i = rng_cones[shift_i]
+        @views dsi = ds[rng_cone_i] 
+        @views λi = λ[rng_cone_i] 
+
+        #circ product λ∘λ
+        dsi[1] = dot(λi, λi)
+        λi0 = λi[1]
+
+        CUDA.@sync dsi[2:end] = 2*λi0*λi[2:end]
+    end
+end
+
 function _kernel_affine_ds_soc!(
     ds::AbstractVector{T},
     λ::AbstractVector{T},
     rng_cones::AbstractVector,
-    n_linear::Cint,
+    n_shift::Cint,
     n_soc::Cint
 ) where {T}
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
     if i <= n_soc
-        shift_i = i + n_linear
+        shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
-        size_i = length(rng_cone_i)
         @views dsi = ds[rng_cone_i] 
         @views λi = λ[rng_cone_i] 
 
@@ -668,6 +771,60 @@ end
     CUDA.@sync kernel(ds, λ, rng_cones, n_shift, n_soc; threads, blocks)
 end
 
+@inline function combined_ds_shift_soc_sequential!(
+    shift::AbstractVector{T},
+    step_z::AbstractVector{T},
+    step_s::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint,
+    σμ::T
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_cone_i = rng_cones[shift_i]
+        @views step_zi = step_z[rng_cone_i] 
+        @views step_si = step_s[rng_cone_i] 
+        @views wi = w[rng_cone_i] 
+        @views shifti = shift[rng_cone_i] 
+    
+        #shift vector used as workspace for a few steps 
+        tmp = shifti            
+
+        #Δz <- WΔz
+        @. tmp = step_zi
+       
+        @views ζ = dot(wi[2:end], step_zi[2:end])
+
+        c = tmp[1] + ζ/(1+wi[1])
+    
+        step_zi[1] = η[i]*(wi[1]*tmp[1] + ζ)
+    
+        CUDA.@sync @. step_zi[2:end] = η[i]*(tmp[2:end] + c*wi[2:end]) 
+
+        #Δs <- W⁻¹Δs
+        @. tmp = step_si         
+        @views ζ = dot(wi[2:end],step_si[2:end])
+
+        c = -tmp[1] + ζ/(1+wi[1])
+    
+        step_si[1] = (one(T)/η[i])*(wi[1]*tmp[1] - ζ)
+    
+        CUDA.@sync @. step_si[2:end] = (one(T)/η[i])*(tmp[2:end] + c*wi[2:end])
+
+        #shift = W⁻¹Δs ∘ WΔz - σμe  
+        val = dot(step_si, step_zi)  
+        shifti[1] = val - σμ 
+
+        s0   = step_si[1]
+        z0   = step_zi[1]
+        CUDA.@sync @. shifti[2:end] = s0*step_zi[2:end] + z0*step_si[2:end]     
+    end
+end
+
 function _kernel_combined_ds_shift_soc!(
     shift::AbstractVector{T},
     step_z::AbstractVector{T},
@@ -675,7 +832,7 @@ function _kernel_combined_ds_shift_soc!(
     w::AbstractVector{T},
     η::AbstractVector{T},
     rng_cones::AbstractVector,
-    n_linear::Cint,
+    n_shift::Cint,
     n_soc::Cint,
     σμ::T
 ) where {T}
@@ -683,7 +840,7 @@ function _kernel_combined_ds_shift_soc!(
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
     if i <= n_soc
-        shift_i = i + n_linear
+        shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
         size_i = length(rng_cone_i)
         @views step_zi = step_z[rng_cone_i] 
@@ -766,6 +923,50 @@ end
     CUDA.@sync kernel(shift, step_z, step_s, w, η, rng_cones, n_shift, n_soc, σμ; threads, blocks)
 end
 
+
+function Δs_from_Δz_offset_soc_sequential!(
+    out::AbstractVector{T},
+    ds::AbstractVector{T},
+    z::AbstractVector{T},
+    w::AbstractVector{T},
+    λ::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        #out = Wᵀ(λ \ ds).  Below is equivalent,
+        #but appears to be a little more stable 
+        
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+
+        outi = view(out, rng_i)
+        dsi = view(ds, rng_i)
+        zi = view(z, rng_i)
+        wi = view(w, rng_i)
+        λi = view(λ, rng_i)
+        ηi = η[i]
+        resz = _soc_residual(zi)
+
+        @views λ1ds1  = dot(λi[2:end],dsi[2:end])
+        @views w1ds1  = dot(wi[2:end],dsi[2:end])
+
+        CUDA.@sync outi .= -zi
+        outi[1] = +zi[1]
+
+        c = λi[1]*dsi[1] - λ1ds1
+        CUDA.@sync outi .*= c/resz
+
+        outi[1] += ηi*w1ds1
+        CUDA.@sync @views outi[2:end]  .+= ηi*(dsi[2:end] + w1ds1/(1+wi[1]).*wi[2:end])
+
+        CUDA.@sync outi .*= (1/λi[1])
+    end
+end
+
 function _kernel_Δs_from_Δz_offset_soc!(
     out::AbstractVector{T},
     ds::AbstractVector{T},
@@ -835,6 +1036,33 @@ end
     CUDA.@sync kernel(out, ds, z, w, λ, η, rng_cones, n_shift, n_soc; threads, blocks)
 end
 
+@inline function step_length_soc_sequential(
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+     z::AbstractVector{T},
+     s::AbstractVector{T},
+     αmax::T,
+     rng_cones::AbstractVector,
+     n_shift::Cint,
+     n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_cone_i = rng_cones[shift_i]
+        @views si = s[rng_cone_i] 
+        @views dsi = ds[rng_cone_i] 
+        @views zi = z[rng_cone_i] 
+        @views dzi = dz[rng_cone_i]         
+
+        αz   = _step_length_soc_component_gpu_2(zi,dzi,αmax)
+        αs   = _step_length_soc_component_gpu_2(si,dsi,αmax)
+        αmax = min(αmax, αz, αs)
+    end
+
+    return αmax
+end
+
 #return maximum allowable step length while remaining in the socone
 function _kernel_step_length_soc(
     dz::AbstractVector{T},
@@ -843,14 +1071,14 @@ function _kernel_step_length_soc(
      s::AbstractVector{T},
      α::AbstractVector{T},
      rng_cones::AbstractVector,
-     n_linear::Cint,
+     n_shift::Cint,
      n_soc::Cint
 ) where {T}
 
     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
 
     if i <= n_soc
-        shift_i = i + n_linear
+        shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
         @views si = s[rng_cone_i] 
         @views dsi = ds[rng_cone_i] 
@@ -1135,6 +1363,51 @@ end
     r2 = t/(2*a);
 
     #return the minimum positive root, up to αmax
+    r1 = r1 < 0 ? floatmax(T) : r1
+    r2 = r2 < 0 ? floatmax(T) : r2
+
+    return min(αmax,r1,r2)
+
+end
+
+# parallel implementation for the step size computation for it
+@inline function _step_length_soc_component_gpu_2(
+    x::AbstractVector{T},
+    y::AbstractVector{T},
+    αmax::T
+) where {T}
+
+    if x[1] >= 0 && y[1] < 0
+        αmax = min(αmax,-x[1]/y[1])
+    end
+
+    # assume that x is in the SOC, and find the minimum positive root
+    # of the quadratic equation:  ||x₁+αy₁||^2 = (x₀ + αy₀)^2
+
+    @views a = y[1]*y[1] - dot(y[2:end], y[2:end]) #NB: could be negative
+    @views b = 2*(x[1]*y[1] - dot(x[2:end],y[2:end]))
+    @views c = max(zero(T), x[1]*x[1] - dot(x[2:end], x[2:end])) #should be ≥0
+    d = b^2 - 4*a*c
+
+    if(c < 0)
+        return -Inf
+    end
+
+    if( (a > 0 && b > 0) || d < 0)
+        return αmax
+
+    elseif a == 0
+        return αmax
+
+    elseif c == 0
+        return (a >= 0 ? αmax : zero(T)) 
+    end 
+
+    t = (b >= 0) ? (-b - sqrt(d)) : (-b + sqrt(d))
+
+    r1 = (2*c)/t;
+    r2 = t/(2*a);
+
     r1 = r1 < 0 ? floatmax(T) : r1
     r2 = r2 < 0 ? floatmax(T) : r2
 

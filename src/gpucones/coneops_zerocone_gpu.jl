@@ -32,15 +32,15 @@
     pd::PrimalOrDualCone
 ) where{T}
 
-    CUDA.@allowscalar begin
-        for i in idx_eq
-            rng_cone_i = rng_cones[i]
-            if pd == PrimalCone::PrimalOrDualCone #zero cone
+    if pd == PrimalCone::PrimalOrDualCone #zero cone
+        CUDA.@allowscalar begin
+            @inbounds for i in idx_eq
+                rng_cone_i = rng_cones[i]
                 @views @. z[rng_cone_i] = zero(T)
             end
         end
+        CUDA.synchronize()
     end
-    CUDA.synchronize()
 end
 
 # unit initialization for asymmetric solves
@@ -52,7 +52,7 @@ end
 ) where{T}
 
     CUDA.@allowscalar begin
-        for i in idx_eq
+        @inbounds for i in idx_eq
             rng_cone_i = rng_cones[i]
             @views @. z[rng_cone_i] = zero(T)
             @views @. s[rng_cone_i] = zero(T)
@@ -71,7 +71,7 @@ end
     #setting it to zero since this is an
     #equality condition
     CUDA.@allowscalar begin
-        for i in idx_eq
+        @inbounds for i in idx_eq
             @views @. Hsblocks[rng_blocks[i]] = zero(T)
         end
     end
@@ -86,7 +86,7 @@ end
 ) where {T}
 
     CUDA.@allowscalar begin
-        for i in idx_eq
+        @inbounds for i in idx_eq
             @views @. y[rng_cones[i]] = zero(T)
         end
     end
@@ -100,7 +100,7 @@ end
 ) where {T}
 
     CUDA.@allowscalar begin
-        for i in idx_eq
+        @inbounds for i in idx_eq
             @views @. ds[rng_cones[i]] = zero(T)
         end
     end
@@ -114,7 +114,7 @@ end
 ) where {T}
 
     CUDA.@allowscalar begin
-        for i in idx_eq
+        @inbounds for i in idx_eq
             @views @. shift[rng_cones[i]] = zero(T)
         end
     end
@@ -128,7 +128,7 @@ end
 ) where {T}
 
     CUDA.@allowscalar begin
-        for i in idx_eq
+        @inbounds for i in idx_eq
             @views @. out[rng_cones[i]] = zero(T)
         end
     end
