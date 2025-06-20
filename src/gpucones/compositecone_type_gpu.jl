@@ -24,6 +24,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     n_linear::Cint
     n_nn::Cint
     n_sparse_soc::Cint
+    n_dense_soc::Cint
     n_soc::Cint
     n_exp::Cint
     n_pow::Cint
@@ -139,9 +140,9 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         end
 
         αp = CuVector(αp)
-        H_dual = CuArray{T}(undef,n_exp+n_pow,3,3)
-        Hs = CuArray{T}(undef,n_exp+n_pow,3,3)
-        grad = CuArray{T}(undef,n_exp+n_pow,3)
+        H_dual = CuArray{T}(undef,3,3,n_exp+n_pow)
+        Hs = CuArray{T}(undef,3,3,n_exp+n_pow)
+        grad = CuArray{T}(undef,3,n_exp+n_pow)
 
         #PSD cone
         #We require all psd cones have the same dimensionality
@@ -174,6 +175,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         #count up elements and degree
         #idx set for sparse socs 
         @views n_sparse_soc = Cint(count(cone -> (nvars(cone) > soc_threshold), cone_specs[(n_linear+1):(n_linear+n_soc)]))
+        n_dense_soc = n_soc - n_sparse_soc
         d = CuVector{T}(undef, n_sparse_soc)
 
         @views numel_sparse_soc  = sum(cone -> nvars(cone), cone_specs[n_linear+1:n_linear+n_sparse_soc]; init = 0)
@@ -205,7 +207,7 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         Matvut = CuSparseMatrixCSR{T}(rowptr, colval, vut, (2*n_sparse_soc, numel))
 
         return new(type_counts, numel, numel_linear, degree, rng_cones, rng_blocks, _is_symmetric,
-                n_linear, n_nn, n_sparse_soc, n_soc, n_exp, n_pow, n_psd,
+                n_linear, n_nn, n_sparse_soc, n_dense_soc, n_soc, n_exp, n_pow, n_psd,
                 idx_eq, idx_inq,
                 w, λ, η, d, vut, Matvut,
                 αp,H_dual,Hs,grad,

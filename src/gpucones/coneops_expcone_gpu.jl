@@ -95,9 +95,9 @@ function _kernel_update_scaling_exp!(
         rng_i = rng_cones[shift_i]
         @views zi = z[rng_i] 
         @views si = s[rng_i] 
-        @views gradi = grad[i,:]
-        @views Hsi = Hs[i,:,:]
-        @views Hi = H_dual[i,:,:]
+        @views gradi = grad[:,i]
+        @views Hsi = Hs[:,:,i]
+        @views Hi = H_dual[:,:,i]
 
         update_dual_grad_H_exp(gradi,Hi,zi)
       
@@ -145,7 +145,7 @@ function _kernel_get_Hs_exp!(
         # update both gradient and Hessian for function f*(z) at the point z
         shift_i = i + n_shift
         rng_i = rng_blocks[shift_i]
-        @views Hsi = Hs[i,:,:]
+        @views Hsi = Hs[:,:,i]
         @views Hsblocki = Hsblock[rng_i]
 
         
@@ -193,8 +193,8 @@ function _kernel_combined_ds_shift_exp!(
         # update both gradient and Hessian for function f*(z) at the point z
         shift_i = i + n_shift
         rng_i = rng_cones[shift_i]
-        @views Hi = H_dual[i,:,:]
-        @views gradi = grad[i,:]
+        @views Hi = H_dual[:,:,i]
+        @views gradi = grad[:,i]
         @views zi = z[rng_i]
         @views step_si = step_s[rng_i]
         @views step_zi = step_z[rng_i]
@@ -537,8 +537,8 @@ end
 
     ψ = z[1]*η[1]-z[1]+z[2]
 
-    dotψu = _dot_xy_gpu(η,u,1:3)
-    dotψv = _dot_xy_gpu(η,v,1:3)
+    dotψu = _dot_xy_gpu_3(η,u)
+    dotψv = _dot_xy_gpu_3(η,v)
 
     coef = ((u[1]*(v[1]/z[1] - v[3]/z[3]) + u[3]*(z[1]*v[3]/z[3] - v[1])/z[3])*ψ - 2*dotψu*dotψv)/(ψ*ψ*ψ)
     @inbounds for i = 1:3

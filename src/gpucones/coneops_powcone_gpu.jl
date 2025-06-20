@@ -101,9 +101,9 @@ function _kernel_update_scaling_pow!(
         @views zi = z[rng_i] 
         @views si = s[rng_i] 
         shift_exp = n_exp+i
-        @views gradi = grad[shift_exp,:]
-        @views Hsi = Hs[shift_exp,:,:]
-        @views Hi = H_dual[shift_exp,:,:]
+        @views gradi = grad[:,shift_exp]
+        @views Hsi = Hs[:,:,shift_exp]
+        @views Hi = H_dual[:,:,shift_exp]
         # update both gradient and Hessian for function f*(z) at the point z
         update_dual_grad_H_pow(gradi,Hi,zi,αp[i])
 
@@ -153,7 +153,7 @@ function _kernel_get_Hs_pow!(
         shift_i = i + n_shift
         rng_i = rng_blocks[shift_i]
         shift_exp = n_exp+i
-        @views Hsi = Hs[shift_exp,:,:]
+        @views Hsi = Hs[:,:,shift_exp]
         @views Hsblocki = Hsblock[rng_i]
 
         
@@ -221,8 +221,8 @@ function _kernel_combined_ds_shift_pow!(
         shift_i = i + n_shift
         rng_i = rng_cones[shift_i]
         shift_exp = i + n_exp
-        @views Hi = H_dual[shift_exp,:,:]
-        @views gradi = grad[shift_exp,:]
+        @views Hi = H_dual[:,:,shift_exp]
+        @views gradi = grad[:,shift_exp]
         @views zi = z[rng_i]
         @views step_si = step_s[rng_i]
         @views step_zi = step_z[rng_i]
@@ -261,7 +261,8 @@ end
     threads = min(n_pow, config.threads)
     blocks = cld(n_pow, threads)
 
-    CUDA.@sync kernel(shift, step_z, step_s, z, grad, H_dual, αp, rng_cones, σμ, n_shift, n_exp, n_pow; threads, blocks)
+    kernel(shift, step_z, step_s, z, grad, H_dual, αp, rng_cones, σμ, n_shift, n_exp, n_pow; threads, blocks)
+    CUDA.synchronize()
 end
 
 # function Δs_from_Δz_offset!(
@@ -413,8 +414,8 @@ function _kernel_compute_barrier_pow(
         @views zi = z[rng_i]
         @views si = s[rng_i]
         
-        cur_z    = @MVector [zi[1] + α*dzi[1], zi[2] + α*dzi[2], zi[3] + α*dzi[3]]
-        cur_s    = @MVector [si[1] + α*dsi[1], si[2] + α*dsi[2], si[3] + α*dsi[3]]
+        cur_z    = (zi[1] + α*dzi[1], zi[2] + α*dzi[2], zi[3] + α*dzi[3])
+        cur_s    = (si[1] + α*dsi[1], si[2] + α*dsi[2], si[3] + α*dsi[3])
     
         barrier_d = barrier_dual_pow(cur_z, αp[i])
         barrier_p = barrier_primal_pow(cur_s, αp[i])
@@ -461,7 +462,7 @@ end
 
 
 @inline function barrier_dual_pow(
-    z::AbstractVector{T}, 
+    z::Union{AbstractVector{T}, NTuple{3,T}},
     α::T
 ) where {T}
 
@@ -471,7 +472,7 @@ end
 end
 
 @inline function barrier_primal_pow(
-    s::AbstractVector{T}, 
+    s::Union{AbstractVector{T}, NTuple{3,T}},
     α::T
 ) where {T}
 
@@ -525,24 +526,22 @@ function gradient_primal_pow(
 
     # unscaled ϕ
     ϕ = (s[1])^(2*α)*(s[2])^(2-2*α)
-    g = @MVector T[0, 0, 0]
-
 
     # obtain g3 from the Newton-Raphson method
     abs_s = abs(s[3])
     if abs_s > eps(T)
-        g[3] = _newton_raphson_powcone(abs_s,ϕ,α)
+        g3 = _newton_raphson_powcone(abs_s,ϕ,α)
         if s[3] < zero(T)
-            g[3] = -g[3]
+            g3 = -g3
         end
-        g[1] = -(α*g[3]*s[3] + 1 + α)/s[1]
-        g[2] = -((1-α)*g[3]*s[3] + 2 - α)/s[2]
+        g1 = -(α*g3*s[3] + 1 + α)/s[1]
+        g2 = -((1-α)*g3*s[3] + 2 - α)/s[2]
     else
-        g[3] = zero(T)
-        g[1] = -(1+α)/s[1]
-        g[2] = -(2-α)/s[2]
+        g3 = zero(T)
+        g1 = -(1+α)/s[1]
+        g2 = -(2-α)/s[2]
     end
-    return SVector(g)
+    return (g1,g2,g3)
 
 end
 
