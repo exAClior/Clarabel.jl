@@ -395,6 +395,18 @@ function _kernel_symmetric_part!(
     return nothing
 end
 
+
+# Set A = (A + A') / 2.  Assumes A is real
+@inline function symmetric_part!(A::AbstractMatrix{T}) where T <: Real
+    m  = size(A,1)
+    @inbounds for r in 1:m
+        @inbounds for c in 1:(r-1)
+            val = (A[r, c] + A[c, r]) / 2
+            A[r,c] = A[c,r] = val
+        end
+    end  
+end
+
 @inline function symmetric_part_gpu!(
     A::AbstractArray{T,3}
 ) where {T}

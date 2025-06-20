@@ -172,12 +172,12 @@ function __precompile_gpu()
         Clarabel.SecondOrderConeT(2),
         Clarabel.ExponentialConeT(),
         Clarabel.PowerConeT(0.5),
-        Clarabel.PSDTriangleConeT(1)  
+        Clarabel.PSDTriangleConeT(3)  
         ];
     nvars = sum(Clarabel.nvars.(cones))
     P = A = sparse(I(nvars)*1.)
     b = c = ones(nvars)
-    settings = Clarabel.Settings(max_iter = 1, direct_solve_method = :cudss)
+    settings = Clarabel.Settings(direct_solve_method = :cudss)
     solver   = Clarabel.Solver(P,c,A,b,cones,settings)
     Clarabel.solve!(solver);
 end
