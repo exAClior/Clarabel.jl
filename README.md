@@ -22,7 +22,7 @@ GPU implementation of Clarabel solver for Julia
   <a href="https://oxfordcontrol.github.io/ClarabelDocs/stable">Documentation</a>
 </p>
 
-__CuClarabel.jl__ is the GPU implementation of the Clarabel solver, which can solve conic problems of the following form:
+The branch `CuClarabel` is the GPU implementation of the Clarabel solver, which can solve conic problems of the following form:
 
 $$
 \begin{array}{r}
@@ -44,8 +44,7 @@ The set $\mathcal{K}$ is a composition of convex cones; we support zero cones (l
 
 
 ## Installation
-- __CuClarabel.jl__ can be added via the Julia package manager (type `]`): `pkg> dev https://github.com/cvxgrp/CuClarabel.git`, (which will overwrite current use of Clarabel solver).
-
+Currently, the GPU implementation is under the branch `CuClarabel` of the package __Clarabel.jl__. You can switch to the GPU version via: `git checkout CuClarabel` under the directory of your local _Clarabel.jl__ package in a terminal. (We aim to merge it back to the `main` branch in the future.)
 ## Tutorial
 
 ### Use in Julia
