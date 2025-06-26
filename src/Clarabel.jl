@@ -29,6 +29,11 @@ module Clarabel
     #version / release info
     include("./version.jl")
 
+    #various algebraic utilities
+    include("./utils/mathutils.jl")
+    include("./utils/csc_assembly.jl")
+    include("./utils/dense_algebra.jl")
+
     #API for user cone specifications
     include("./cones/cone_api.jl")
 
@@ -95,8 +100,6 @@ module Clarabel
     include("./gpucones/coneops_nonsymmetric_common_gpu.jl")
 
     #various algebraic utilities
-    include("./utils/mathutils.jl")
-    include("./utils/csc_assembly.jl")
     include("./utils/mathutils_gpu.jl")
     include("./utils/csc_assembly_gpu.jl")
 

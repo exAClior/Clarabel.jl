@@ -65,6 +65,7 @@ chordal\\_decomposition\\_enable            | true            | enable chordal d
 chordal\\_decomposition\\_merge_method      | :clique_graph   | chordal decomposition merge method (:clique\\_graph, :parent\\_child or :none)
 chordal\\_decomposition\\_compact           | true            | assemble decomposed system in "compact" form
 chordal\\_decomposition\\_complete_dual     | false           | complete PSD dual variables after decomposition
+pardiso\\_iparm                             | [realmin(Int32); 64] | pardiso iparm settings (realmin(Int32) entries are ignored)
 
 """
 Base.@kwdef mutable struct Settings{T <: AbstractFloat}
@@ -111,7 +112,7 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
 
     #the direct linear solver package to use
     direct_kkt_solver::Bool             = true   #indirect not yet supported
-    direct_solve_method::Symbol         = :qdldl
+    direct_solve_method::Symbol         = :auto
 
     #static regularization parameters
     static_regularization_enable::Bool    = true
@@ -133,12 +134,17 @@ Base.@kwdef mutable struct Settings{T <: AbstractFloat}
     
     #preprocessing 
     presolve_enable::Bool               = true
+    input_sparse_dropzeros::Bool        = false
 
     #chordal decomposition
     chordal_decomposition_enable::Bool  = true
     chordal_decomposition_merge_method::Symbol = :clique_graph
     chordal_decomposition_compact::Bool = true
     chordal_decomposition_complete_dual::Bool = true
+
+    #pardiso iparm settings 
+    pardiso_iparm::MVector{64, Int32} = @MArray fill(typemin(Int32),64)
+    pardiso_verbose::Bool = false
 
     #centrality check
     neighborhood                        = 1e-6
@@ -181,8 +187,14 @@ function Base.show(io::IO, settings::Clarabel.Settings{T}) where {T}
     for name in names
         v = getfield(settings,name)
 		type = String(Symbol(typeof(v)))
-        push!(types, type)
-        push!(values,type == BigFloat ? @sprintf("%g",v) : string(v))
+        if name == :pardiso_iparm
+            type = split(type,".")[end]  #drops "StaticArraysCore"
+            push!(types, type)
+            push!(values, "iparm array [...]")
+        else 
+            push!(types, type)
+            push!(values,type == BigFloat ? @sprintf("%g",v) : string(v))
+        end
     end
     names = collect(String.(names))
     types = String.(Symbol.(types))

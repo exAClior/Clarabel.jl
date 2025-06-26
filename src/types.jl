@@ -186,6 +186,8 @@ mutable struct DefaultProblemData{T} <: AbstractProblemData{T}
     normb::Option{T}  #unscaled inf norm of b
 
     presolver::Option{Presolver{T}}
+    dropped_zeroes::DefaultInt #number of eliminated structural zeros
+
     chordal_info::Option{ChordalInfo{T}}
 
 end
@@ -224,9 +226,20 @@ DefaultProblemDataGPU(args...) = DefaultProblemDataGPU{DefaultFloat}(args...)
 # progress info
 # ----------------------
 
+struct LinearSolverInfo 
+    name::Symbol
+    threads::DefaultInt
+    direct::Bool
+    nnzA::DefaultInt # nnz in L for A = LDL^T
+    nnzL::DefaultInt # nnz in A for A = LDL^T
+end
+
+LinearSolverInfo() = LinearSolverInfo(:none, 1, true, 0, 0)
+
+
 mutable struct DefaultInfo{T} <: AbstractInfo{T}
 
-    μ::T
+    mu::T
     sigma::T
     step_length::T
     iterations::UInt32
@@ -254,13 +267,18 @@ mutable struct DefaultInfo{T} <: AbstractInfo{T}
 
     status::SolverStatus
 
-    function DefaultInfo{T}() where {T}
+    # linear solver information
+    linsolver::LinearSolverInfo
 
-        #here we set the first set of fields to zero (it doesn't matter),
-        #but the previous iterates to Inf to avoid weird edge cases 
-        prevvals = ntuple(x->floatmax(T), 6);
-        new((ntuple(x->0, fieldcount(DefaultInfo)-6-1)...,prevvals...,UNSOLVED)...)
-    end
+end
+
+function DefaultInfo{T}() where {T}
+
+    #here we set the first set of fields to zero (it doesn't matter),
+    #but the previous iterates to Inf to avoid weird edge cases 
+    prevvals = ntuple(x->floatmax(T), 6);
+    linsolver = LinearSolverInfo()
+    DefaultInfo{T}((ntuple(x->0, fieldcount(DefaultInfo)-6-2)...,prevvals...,UNSOLVED,linsolver)...)
 
 end
 
@@ -360,11 +378,29 @@ mutable struct Solver{T <: AbstractFloat} <: AbstractSolver{T}
     settings::Settings{T}
     timers::TimerOutput
 
+    # all inner constructors initalize most fields to nothing,
+    # initialize the timers and copy user settings as needed 
+
+    function Solver{T}(settings::Settings{T}) where {T}
+        settings = deepcopy(settings)
+        new{T}(ntuple(x->nothing, fieldcount(Solver)-2)...,settings,_timer_init())
+    end 
+
+    function Solver{T}() where {T}
+        settings = Settings{T}()
+        new{T}(ntuple(x->nothing, fieldcount(Solver)-2)...,settings,_timer_init())
+    end
+
+    function Solver{T}(d::Dict) where {T}
+        settings = Settings{T}(d)
+        new{T}(ntuple(x->nothing, fieldcount(Solver)-2)...,settings,_timer_init())
+    end
+
 end
 
-#initializes all fields except settings to nothing
-function Solver{T}(settings::Settings{T}) where {T}
+Solver(args...; kwargs...) = Solver{DefaultFloat}(args...; kwargs...)
 
+function _timer_init()
     to = TimerOutput()
     #setup the main timer sections here and
     #zero them.   This ensures that the sections
@@ -373,19 +409,9 @@ function Solver{T}(settings::Settings{T}) where {T}
     @timeit to "solve!" begin (nothing) end
     reset_timer!(to["setup!"])
     reset_timer!(to["solve!"])
+    to
+end 
 
-    Solver{T}(ntuple(x->nothing, fieldcount(Solver)-2)...,settings,to)
-end
 
-function Solver{T}() where {T}
-    #default settings
-    Solver{T}(Settings{T}())
-end
 
-#partial user defined settings
-function Solver{T}(d::Dict) where {T}
-    Solver{T}(Settings{T}(d))
-end
-
-Solver(args...; kwargs...) = Solver{DefaultFloat}(args...; kwargs...)
 

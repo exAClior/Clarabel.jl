@@ -9,6 +9,11 @@ function DefaultProblemData{T}(
 	settings::Settings{T}
 ) where {T}
 
+	# clean up the cones by consolidating repeated NNs,
+	# eliminate empty cones, transform singletons etc
+	# this makes a locally owned copy of the cones
+	cones = cones_new_collapsed(cones);
+
 	# some caution is required to ensure we take a minimal,
 	# but nonzero, number of data copies during presolve steps 
 	P_new, q_new, A_new, b_new, cones_new = 
@@ -39,23 +44,36 @@ function DefaultProblemData{T}(
 	end 
 
 	# now make sure we have a clean copy of everything if we
-	#haven't made one already.   Necessary since we will scale
-	# scale the internal copy and don't want to step on the user
+	# haven't made one already.   Necessary since we will scale
+	# the internal copy and don't want to step on the user
 	copy_if_nothing(x,y) = isnothing(x) ? deepcopy(y) : x
 	P_new = copy_if_nothing(P_new,P)
 	q_new = copy_if_nothing(q_new,q)
 	A_new = copy_if_nothing(A_new,A)
 	b_new = copy_if_nothing(b_new,b)
-	cones_new = copy_if_nothing(cones_new,cones)
 
-	#cap entries in b at INFINITY.  This is important 
-	#for inf values that were not in a reduced cone
-	#this is not considered part of the "presolve", so
-	#can always happen regardless of user settings 
+	# cones was already copied, so can just pass it through without copying
+	cones_new = isnothing(cones_new) ? cones : cones_new
+
+	# cap entries in b at INFINITY.  This is important 
+	# for inf values that were not in a reduced cone
+	# this is not considered part of the "presolve", so
+	# can always happen regardless of user settings 
 	@. b_new .= min(b_new,T(Clarabel.get_infinity()))
 	
 	#this ensures m is the *reduced* size m
 	(m,n) = size(A_new)
+
+	# explicitly dropzeros on the copied data, since dropzeros
+	# operates in place.  PJG: revisit this order of operations
+	# once a proper presolver is implemented, since it might
+	# be preferable to dropzeros then presolve
+	dropped_zeros = 0;
+	if settings.input_sparse_dropzeros 
+		dropped_zeros += nnz(P_new) - nnz(dropzeros!(P_new))
+		dropped_zeros += nnz(A_new) - nnz(dropzeros!(A_new))
+	end
+
 
 	equilibration = DefaultEquilibration{T}(n,m,false)
 
@@ -66,7 +84,7 @@ function DefaultProblemData{T}(
 	DefaultProblemData{T}(
 		P_new,q_new,A_new,b_new,cones_new,
 		n,m,equilibration,normq,normb,
-		presolver,chordal_info)
+		presolver,dropped_zeros,chordal_info)
 
 end
 
@@ -123,6 +141,16 @@ function DefaultProblemDataGPU{T}(
 	#this ensures m is the *reduced* size m
 	(m,n) = size(A_new)
 
+	# explicitly dropzeros on the copied data, since dropzeros
+	# operates in place.  PJG: revisit this order of operations
+	# once a proper presolver is implemented, since it might
+	# be preferable to dropzeros then presolve
+	dropped_zeros = 0;
+	if settings.input_sparse_dropzeros 
+		dropped_zeros += nnz(P_new) - nnz(dropzeros!(P_new))
+		dropped_zeros += nnz(A_new) - nnz(dropzeros!(A_new))
+	end
+	
 	equilibration = DefaultEquilibration{T}(n,m,true)
 
 	normq = norm(q_new, Inf)
@@ -186,6 +214,10 @@ end
 
 function data_is_presolved(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
 	return !isnothing(data.presolver)
+end
+
+function data_is_dropped_zeros(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
+	return data.dropped_zeroes != 0
 end
 
 function data_is_chordal_decomposed(data::Union{DefaultProblemData{T},DefaultProblemDataGPU{T}}) where {T}
@@ -431,8 +463,9 @@ function try_chordal_info(
         return nothing
     end
 
-    # nothing to do if there are no PSD cones
-    if !any(c -> isa(c,PSDTriangleConeT), cones)
+    # nothing to do if there are no PSD cones or they 
+	# are all of trivial size 
+    if !any(c -> (isa(c,PSDTriangleConeT) && c.dim > 2), cones)
         return nothing 
     end 
 

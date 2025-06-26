@@ -59,6 +59,10 @@ end
 
 DefaultKKTSystemGPU(args...) = DefaultKKTSystemGPU{DefaultFloat}(args...)
 
+function kkt_linear_solver_info(kktsystem::DefaultKKTSystemGPU{T}) where{T}
+    return kktsolver_linear_solver_info(kktsystem.kktsolver)
+end
+
 function kkt_update!(
     kktsystem::DefaultKKTSystemGPU{T},
     data::DefaultProblemDataGPU{T},

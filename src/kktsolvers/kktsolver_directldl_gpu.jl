@@ -139,17 +139,10 @@ end
 
 end
 
-function _scaled_update_values!(
-    GPUsolver::AbstractDirectLDLSolver{T},
-    KKT::CuSparseMatrix{T},
-    index::CuVector{Ti},
-    values::CuVector{T},
-    scale::T
-) where{T,Ti}
-
-    #Update values in the KKT matrix K
-    @. KKT.nzVal[index] = scale*values
-
+function kktsolver_linear_solver_info(
+    kktsolver::GPULDLKKTSolver{T}
+) where {T}
+    linear_solver_info(kktsolver.GPUsolver)
 end
 
 #updates KKT matrix values
