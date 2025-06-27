@@ -215,6 +215,8 @@ mutable struct DefaultProblemDataGPU{T} <: AbstractProblemData{T}
     normb::Option{T}  #unscaled inf norm of b
 
     presolver::Option{Presolver{T}}
+    dropped_zeroes::DefaultInt #number of eliminated structural zeros
+    
     chordal_info::Option{ChordalInfo{T}}
 
 end

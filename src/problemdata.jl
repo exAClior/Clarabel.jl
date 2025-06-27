@@ -141,14 +141,14 @@ function DefaultProblemDataGPU{T}(
 	#this ensures m is the *reduced* size m
 	(m,n) = size(A_new)
 
-	# explicitly dropzeros on the copied data, since dropzeros
-	# operates in place.  PJG: revisit this order of operations
-	# once a proper presolver is implemented, since it might
-	# be preferable to dropzeros then presolve
+	# # explicitly dropzeros on the copied data, since dropzeros
+	# # operates in place.  
+	# # YC: currently, it is disabled because dropzeros! doesn't support GPU input
 	dropped_zeros = 0;
 	if settings.input_sparse_dropzeros 
-		dropped_zeros += nnz(P_new) - nnz(dropzeros!(P_new))
-		dropped_zeros += nnz(A_new) - nnz(dropzeros!(A_new))
+		error("Please set 'input_sparse_dropzeros = false' before using the GPU solver.")
+		# dropped_zeros += nnz(P_new) - nnz(dropzeros!(P_new))
+		# dropped_zeros += nnz(A_new) - nnz(dropzeros!(A_new))
 	end
 	
 	equilibration = DefaultEquilibration{T}(n,m,true)
@@ -159,7 +159,7 @@ function DefaultProblemDataGPU{T}(
 	DefaultProblemDataGPU{T}(
 		P_new,q_new,A_new,At_new,b_new,cones_new,
 		n,m,equilibration,normq,normb,
-		presolver,chordal_info)
+		presolver,dropped_zeros,chordal_info)
 
 end
 
