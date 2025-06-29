@@ -249,7 +249,8 @@ end
 Computes the solution to the problem in a `Clarabel.Solver` previously defined in [`setup!`](@ref).
 """
 function solve!(
-    s::Solver{T}
+    s::Solver{T},
+    warm_start::Bool = false
 ) where{T}
 
     # initialization needed for first loop pass 
