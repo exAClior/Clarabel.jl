@@ -269,10 +269,26 @@ function solve!(
     info_reset!(s.info,s.timers)
 
     @timeit s.timers "solve!" begin
-
-        # initialize variables to some reasonable starting point
-        @timeit s.timers "default start" solver_default_start!(s)
-
+	# initialize variables to some reasonable starting point
+        if warm_start
+            # 从上一个解初始化变量   
+            s.variables.x .= s.prev_vars.x
+            s.variables.z .= s.prev_vars.z
+            s.variables.s .= s.prev_vars.s 
+            s.variables.τ = s.prev_vars.τ
+            s.variables.κ = s.prev_vars.κ
+            
+            # 更新KKT系统 
+	    #kkt_solve_initial_point!(s.kktsystem,s.variables,s.data)
+            kkt_update!(s.kktsystem, s.data, s.cones)  
+                        
+            # 向锥内部移动  
+            _shift_to_cone_interior!(s.variables.s, s.cones, PrimalCone)  
+            _shift_to_cone_interior!(s.variables.z, s.cones, DualCone)  
+            
+        else
+            @timeit s.timers "default start" solver_default_start!(s)
+        end
         @timeit s.timers "IP iteration" begin
 
         # ----------
