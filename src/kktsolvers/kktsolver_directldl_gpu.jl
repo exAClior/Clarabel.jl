@@ -493,7 +493,7 @@ function _kernel_update_KKT_sparse_soc_parallel!(
     n_sparse_soc::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_sparse_soc
         η2 = η[i]*η[i]

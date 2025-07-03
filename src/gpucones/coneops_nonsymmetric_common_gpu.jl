@@ -23,7 +23,7 @@ function _kernel_mul_Hs_nonsymmetric!(
     n_nonsymmetric::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_nonsymmetric
         # update both gradient and Hessian for function f*(z) at the point z

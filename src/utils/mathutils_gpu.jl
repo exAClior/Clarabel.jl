@@ -18,7 +18,7 @@ function _kernel_rectify_equilibration!(
     n_rec::Cint
  ) where{T}
  
-     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+     i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
  
      if i <= n_rec
          shift_i = i + n_shift
@@ -78,7 +78,7 @@ function _kernel_row_norms!(
 	A::AbstractSparseMatrix{T}
  ) where{T}
  
-     i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+     i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
  
      if i <= length(norms)
         @inbounds for j = A.rowPtr[i]:(A.rowPtr[i + 1] - 1)
@@ -126,7 +126,7 @@ function _kernel_lrscale_gpu!(L::AbstractVector{T}, M::AbstractSparseMatrix{T}, 
 	Mrowptr = M.rowPtr
 	Mcolval = M.colVal
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 	if i <= m
 		for j = Mrowptr[i]:(Mrowptr[i + 1] - 1)
 	 		Mnzval[j] *= R[Mcolval[j]] * L[i]
@@ -155,7 +155,7 @@ function _kernel_lscale_gpu!(L::AbstractVector{T}, M::AbstractSparseMatrix{T}) w
 	Mnzval  = M.nzVal
 	Mrowptr = M.rowPtr
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 	if i <= m
 		for j = Mrowptr[i]:(Mrowptr[i + 1] - 1)
 	 		Mnzval[j] *= L[i]
@@ -187,7 +187,7 @@ function _kernel_rscale_gpu!(M::AbstractSparseMatrix{T}, R::AbstractVector{T}) w
 	Mrowptr = M.rowPtr
     Mcolval = M.colVal
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 	if i <= m
 		for j = Mrowptr[i]:(Mrowptr[i + 1] - 1)
 	 		Mnzval[j] *= R[Mcolval[j]]
@@ -318,7 +318,7 @@ function _kernel_mask_zeros!(
     n::Clong
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n
         @views Ai = A[:,:,i]
@@ -351,7 +351,7 @@ function _kernel_lrscale!(
     n::Clong
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n
         @views Ai = A[:,:,i]
@@ -385,7 +385,7 @@ function _kernel_symmetric_part!(
     n::Clong
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n
         @views Ai = A[:,:,i]

@@ -30,7 +30,7 @@ function _kernel_csr_rowcount_dense_full(
     n_cones::Cint
 )
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     #just add the nonzero count each row
     if i <= n_cones
@@ -82,7 +82,7 @@ function _kernel_csr_rowcount_missing_diag_full(
     P_zero::AbstractVector{Cint}
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     #just add the nonzero count each row
     if i <= P.dims[1]
@@ -163,7 +163,7 @@ function _kernel_csr_rowcount_block(
     shift::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     #just add the nonzero count each row
     if i <= A.dims[1]
@@ -193,7 +193,7 @@ function _kernel_csr_rowcount_block_full(
     At::AbstractSparseMatrix{T}
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     #just add the nonzero count each row
     if i <= P.dims[1]
@@ -281,7 +281,7 @@ function _kernel_csr_count_sparse_soc_parallel(
     n_sparse_soc::Cint
 )
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     #just add the nonzero count each row
     if i <= n_sparse_soc
@@ -361,7 +361,7 @@ function _kernel_csr_fill_block(
     initcol::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
     if i <= M.dims[1]
         @inbounds for j = M.rowPtr[i]:(M.rowPtr[i+1]-1)
             row = i + (initrow - 1)
@@ -416,7 +416,7 @@ function _kernel_csr_fill_P_diag_full(
     P_zero::AbstractVector{Cint}, 
     PtoKKT::AbstractVector{Cint}
 ) where {T}
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
     
     if i <= P.dims[1]
         if(P_zero[i] == -1)    #completely empty column
@@ -575,7 +575,7 @@ function _kernel_csr_fill_sparse_soc_parallel(
     numel_shift::Cint
 )
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     #just add the nonzero count each row
     if i <= n_sparse_soc
@@ -705,7 +705,7 @@ function _kernel_csr_fill_dense_full(
     n::Cint,
     n_rec::Cint
 ) where {T}
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
     
     if i <= n_rec
         shift_i = cone_shift+i
@@ -757,7 +757,7 @@ function _kernel_csr_fill_diag(
     blockdim::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
     if i <= blockdim
         row                 = i + offset - 1
         dest                = rowptr[row]
@@ -798,7 +798,7 @@ function _kernel_csr_fill_sparsecone(
     blockdim::Cint
 )
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
     if i <= blockdim
         vt[i] = start_v + i
         ut[i] = start_u + i
@@ -896,7 +896,7 @@ function _kernel_map_diag_full(
     colval::AbstractVector{Cint}, 
     diagind::AbstractVector{Cint}
 )
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
     
     if i <= length(diagind)
         @inbounds for j = rowptr[i]:(rowptr[i+1]-1)
@@ -944,7 +944,7 @@ function _kernel_count_diagonal_entries_full!(P::AbstractSparseMatrix{T}, count:
 
 	n = size(P,1)
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 	if i <= n
         @inbounds for j = P.rowPtr[i]:P.rowPtr[i+1] -1
             if (P.colVal[j] == i) 

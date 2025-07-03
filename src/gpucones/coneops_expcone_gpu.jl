@@ -17,7 +17,7 @@ function _kernel_unit_initialization_exp!(
    n_exp::Cint
 ) where{T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_exp
         shift_i = i + n_shift
@@ -87,7 +87,7 @@ function _kernel_update_scaling_exp!(
     n_exp::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_exp
         # update both gradient and Hessian for function f*(z) at the point z
@@ -139,7 +139,7 @@ function _kernel_get_Hs_exp!(
     n_exp::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_exp
         # update both gradient and Hessian for function f*(z) at the point z
@@ -187,7 +187,7 @@ function _kernel_combined_ds_shift_exp!(
     n_exp::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_exp
         # update both gradient and Hessian for function f*(z) at the point z
@@ -264,7 +264,7 @@ function _kernel_step_length_exp(
      n_exp::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_exp
         # update both gradient and Hessian for function f*(z) at the point z
@@ -366,7 +366,7 @@ function _kernel_compute_barrier_exp(
     # we want to avoid allocating a vector for the intermediate 
     # sums, so the two barrier functions are written to accept 
     # both vectors and 3-element tuples. 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_exp
         # update both gradient and Hessian for function f*(z) at the point z

@@ -9,16 +9,16 @@ function _kernel_margins_soc(
     n_shift::Cint,
     n_soc::Cint
 ) where{T}
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
-        size_i = length(rng_cone_i)
+        size_i = Cint(length(rng_cone_i))
         @views zi = z[rng_cone_i] 
         
         val = zero(T)
-        @inbounds for j in 2:size_i 
+        @inbounds for j in Cint(2):size_i 
             val += zi[j]*zi[j]
         end
         α[i]  = zi[1] - sqrt(val)
@@ -57,7 +57,7 @@ function _kernel_scaled_unit_shift_soc!(
     n_soc::Cint
 ) where{T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_shift
@@ -94,7 +94,7 @@ function _kernel_unit_initialization_soc!(
     n_soc::Cint
 ) where{T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_linear
@@ -102,12 +102,12 @@ function _kernel_unit_initialization_soc!(
         @views zi = z[rng_cone_i] 
         @views si = s[rng_cone_i] 
         zi[1] = one(T)
-        @inbounds for j in 2:length(zi)
+        @inbounds for j in Cint(2):length(zi)
             zi[j] = zero(T)
         end
 
         si[1] = one(T)
-        @inbounds for j in 2:length(si)
+        @inbounds for j in Cint(2):length(si)
             si[j] = zero(T)
         end
     end
@@ -140,15 +140,15 @@ function _kernel_set_identity_scaling_soc!(
     n_soc::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_linear
         rng_cone_i = rng_cones[shift_i]
-        size_i = length(rng_cone_i)
+        size_i = Cint(length(rng_cone_i))
         @views wi = w[rng_cone_i] 
         wi[1] = one(T)
-        @inbounds for j in 2:size_i 
+        @inbounds for j in Cint(2):size_i 
             wi[j] = zero(T)
         end
         η[i]  = one(T)
@@ -256,7 +256,7 @@ function _kernel_update_scaling_soc!(
     n_soc::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_shift
@@ -406,7 +406,7 @@ end
     n_sparse_soc::Cint
 ) where {T}
     
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_sparse_soc 
         shift_i = i + n_shift
@@ -480,7 +480,7 @@ function _kernel_get_Hs_soc_dense!(
     n_dense_soc::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_dense_soc
         shift_i = i + n_shift
@@ -564,7 +564,7 @@ function _kernel_get_Hs_soc_sparse_parallel!(
     n_sparse_soc::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_sparse_soc
         shift_i = i + n_shift
@@ -644,7 +644,7 @@ function _kernel_mul_Hs_soc!(
 
     # y = = H^{-1}x = W^TWx
     # where H^{-1} = \eta^{2} (2*ww^T - J)
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_linear
@@ -739,7 +739,7 @@ function _kernel_affine_ds_soc!(
     n_soc::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_shift
@@ -845,7 +845,7 @@ function _kernel_combined_ds_shift_soc!(
     σμ::T
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_shift
@@ -987,7 +987,7 @@ function _kernel_Δs_from_Δz_offset_soc!(
     n_soc::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_shift
@@ -1083,7 +1083,7 @@ function _kernel_step_length_soc(
      n_soc::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_shift
@@ -1136,7 +1136,7 @@ function _kernel_compute_barrier_soc(
     n_soc::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
         shift_i = i + n_linear

@@ -220,7 +220,7 @@ function _kernel_step_length_nonnegative(
 ) where {T}
 
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
     if i <= len_rng
         αz = dz[i] < 0 ? (min(αmax,-z[i]/dz[i])) : αmax
         αs = ds[i] < 0 ? (min(αmax,-s[i]/ds[i])) : αmax
@@ -272,7 +272,7 @@ function _kernel_compute_barrier_nonnegative(
     len_nn::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
     if i <= len_nn
         barrier[i] = -logsafe((s[i] + α*ds[i])*(z[i] + α*dz[i]))
     end

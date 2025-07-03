@@ -36,7 +36,7 @@ function _kernel_scaled_unit_shift_psd!(
     n_psd::Cint
 ) where{T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         # #adds αI to the vectorized triangle,
@@ -100,7 +100,7 @@ function _kernel_set_identity_scaling_psd!(
     n_psd::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         #Other entries of R, Rinv, Hspsd to 0's
@@ -198,7 +198,7 @@ function _kernel_get_Hs_psd!(
     n_psd::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         shift_i = i + n_shift
@@ -267,7 +267,7 @@ function _kernel_affine_ds_psd!(
     n_psd::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         #We have Λ = Diagonal(K.λ), so
@@ -361,7 +361,7 @@ function _kernel_op_λ!(
     n_psd::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         @views Xi = X[:,:,i]
@@ -458,7 +458,7 @@ function _kernel_logdet!(
     psd_dim::Cint,
     n_psd::Cint
 ) where {T}
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         val = zero(T)
@@ -631,7 +631,7 @@ function _kernel_svec_to_mat!(
     n_psd::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         shift_i = i + n_shift
@@ -666,7 +666,7 @@ function _kernel_svec_to_mat_no_shift!(
     n_psd::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         @views Zi = Z[:,:,i]
@@ -701,7 +701,7 @@ function _kernel_mat_to_svec!(
     n_psd::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         shift_i = i + n_shift
@@ -736,7 +736,7 @@ function _kernel_mat_to_svec_no_shift!(
     n_psd::Cint
 ) where {T}
 
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_psd
         @views Zi = Z[:,:,i]
@@ -812,7 +812,7 @@ function _kernel_skron!(
     A::AbstractArray{T,3},
     n::Clong
 ) where {T}
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n
         @views outi = out[:,:,i]
@@ -846,7 +846,7 @@ function _kernel_right_mul!(
     n2::Cint,
     n::Cint
 ) where {T}
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n
         (k,j) = divrem(i-1, n2)
@@ -885,7 +885,7 @@ function _kernel_left_mul!(
     n2::Cint,
     n::Cint
 ) where {T}
-    i = (blockIdx().x-1)*blockDim().x+threadIdx().x
+    i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n
         (k,j) = divrem(i-1, n2)
