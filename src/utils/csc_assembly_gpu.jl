@@ -498,45 +498,7 @@ end
     if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
         _csr_fill_sparse_soc_parallel(map.vu, map.vut, rowptr, colval, rng_cones, m, n, n_linear, n_sparse_soc, cones.numel_linear)
     else n_sparse_soc > 0
-        prow = m + n + one(Cint) #next sparse row to fill
-
-        n_sparse_soc = cones.n_sparse_soc
-        n_linear = cones.n_linear
-        sparse_idx = zero(Cint)
-
-        CUDA.@allowscalar for i in one(Cint):n_sparse_soc
-            #add sparse expansions columns for sparse cones 
-            rng_cone_i = rng_cones[n_linear + i] .+ n
-            len_i = Cint(length(rng_cone_i))
-            rng_vec_vt = (sparse_idx+one(Cint)):(sparse_idx+len_i)
-            rng_vec_ut = (sparse_idx+len_i+one(Cint)):(sparse_idx+Cint(2)*len_i)
-
-            rowptr_i = view(rowptr, rng_cone_i)
-            #regard each vi ui sequentially
-            @views @. map.vu[rng_vec_vt] = rowptr_i
-            @views @. colval[rowptr_i] = prow
-            @views @. rowptr_i += one(Cint)
-            CUDA.synchronize()
-
-            @views @. map.vu[rng_vec_ut] = rowptr_i
-            @views @. colval[rowptr_i] = prow + one(Cint)
-            @views @. rowptr_i += one(Cint)
-            CUDA.synchronize()
-
-            #add sparse expansions rows for sparse cones 
-            start_col = rng_cone_i.start - one(Cint)
-
-            start_v = rowptr[prow] - one(Cint)
-            start_u = rowptr[prow+one(Cint)] - one(Cint)
-            vti = view(map.vut, rng_vec_vt)
-            uti = view(map.vut, rng_vec_ut)
-            _csr_fill_sparse_uv_gpu(vti, uti, colval, start_col, start_v, start_u)
-            rowptr[prow] += len_i
-            rowptr[prow+one(Cint)] += len_i
-
-            sparse_idx += Cint(2)*len_i
-            prow += Cint(2) #next sparse soc to fill 
-        end
+        _csr_fill_sparse_soc_sequential(map.vu, map.vut, rowptr, colval, rng_cones, m, n, n_linear, n_sparse_soc)
     end
 
     if n_sparse_soc > zero(Cint)
@@ -647,6 +609,55 @@ end
     blocks = cld(n_sparse_soc, threads)
 
     CUDA.@sync kernel(mapvu, mapvut, rowptr, colval, rng_cones, m, n, n_linear, n_sparse_soc, numel_shift; threads, blocks)
+end
+
+@inline function _csr_fill_sparse_soc_sequential(
+    mapvu::AbstractVector{Cint},
+    mapvut::AbstractVector{Cint},
+    rowptr::AbstractVector{Cint}, 
+    colval::AbstractVector{Cint},
+    rng_cones::AbstractVector,
+    m::Cint,
+    n::Cint,
+    n_linear::Cint,
+    n_sparse_soc::Cint
+)
+    prow = m + n + one(Cint) #next sparse row to fill
+    sparse_idx = zero(Cint)
+
+    CUDA.@allowscalar for i in one(Cint):n_sparse_soc
+        #add sparse expansions columns for sparse cones 
+        rng_cone_i = rng_cones[n_linear + i] .+ n
+        len_i = Cint(length(rng_cone_i))
+        rng_vec_vt = (sparse_idx+one(Cint)):(sparse_idx+len_i)
+        rng_vec_ut = (sparse_idx+len_i+one(Cint)):(sparse_idx+Cint(2)*len_i)
+
+        rowptr_i = view(rowptr, rng_cone_i)
+        #regard each vi ui sequentially
+        @views @. mapvu[rng_vec_vt] = rowptr_i
+        @views @. colval[rowptr_i] = prow
+        @views @. rowptr_i += one(Cint)
+        CUDA.synchronize()
+
+        @views @. mapvu[rng_vec_ut] = rowptr_i
+        @views @. colval[rowptr_i] = prow + one(Cint)
+        @views @. rowptr_i += one(Cint)
+        CUDA.synchronize()
+
+        #add sparse expansions rows for sparse cones 
+        start_col = rng_cone_i.start - one(Cint)
+
+        start_v = rowptr[prow] - one(Cint)
+        start_u = rowptr[prow+one(Cint)] - one(Cint)
+        vti = view(mapvut, rng_vec_vt)
+        uti = view(mapvut, rng_vec_ut)
+        _csr_fill_sparse_uv_gpu(vti, uti, colval, start_col, start_v, start_u)
+        rowptr[prow] += len_i
+        rowptr[prow+one(Cint)] += len_i
+
+        sparse_idx += Cint(2)*len_i
+        prow += Cint(2) #next sparse soc to fill 
+    end
 end
 
 # #Populate the upper or lower triangle with 0s using the K.colptr

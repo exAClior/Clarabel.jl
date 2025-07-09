@@ -14,14 +14,12 @@ function _kernel_margins_soc(
     if i <= n_soc
         shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
-        size_i = Cint(length(rng_cone_i))
-        @views zi = z[rng_cone_i] 
         
         val = zero(T)
-        @inbounds for j in Cint(2):size_i 
-            val += zi[j]*zi[j]
+        @inbounds for j in (rng_cone_i.start + one(Cint)):rng_cone_i.stop 
+            val += z[j]*z[j]
         end
-        α[i]  = zi[1] - sqrt(val)
+        α[i]  = z[rng_cone_i.start] - sqrt(val)
     end
 
     return nothing
@@ -62,8 +60,7 @@ function _kernel_scaled_unit_shift_soc!(
     if i <= n_soc
         shift_i = i + n_shift
         rng_cone_i = rng_cones[shift_i]
-        @views zi = z[rng_cone_i] 
-        zi[1] += α
+        z[rng_cone_i.start] += α
     end
 
     return nothing
@@ -99,16 +96,14 @@ function _kernel_unit_initialization_soc!(
     if i <= n_soc
         shift_i = i + n_linear
         rng_cone_i = rng_cones[shift_i]
-        @views zi = z[rng_cone_i] 
-        @views si = s[rng_cone_i] 
-        zi[1] = one(T)
-        @inbounds for j in Cint(2):length(zi)
-            zi[j] = zero(T)
+        z[rng_cone_i.start] = one(T)
+        @inbounds for j in (rng_cone_i.start + one(Cint)):rng_cone_i.stop 
+            z[j] = zero(T)
         end
 
-        si[1] = one(T)
-        @inbounds for j in Cint(2):length(si)
-            si[j] = zero(T)
+        s[rng_cone_i.start] = one(T)
+        @inbounds for j in (rng_cone_i.start + one(Cint)):rng_cone_i.stop 
+            s[j] = zero(T)
         end
     end
  
@@ -143,13 +138,11 @@ function _kernel_set_identity_scaling_soc!(
     i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
-        shift_i = i + n_linear
-        rng_cone_i = rng_cones[shift_i]
-        size_i = Cint(length(rng_cone_i))
-        @views wi = w[rng_cone_i] 
-        wi[1] = one(T)
-        @inbounds for j in Cint(2):size_i 
-            wi[j] = zero(T)
+        rng_cone_i = rng_cones[i + n_linear]
+
+        w[rng_cone_i.start] = one(T)
+        @inbounds for j in (rng_cone_i.start + one(Cint)):rng_cone_i.stop 
+            w[j] = zero(T)
         end
         η[i]  = one(T)
     end
@@ -190,61 +183,6 @@ end
     end
 end
 
-
-@inline function update_scaling_soc_sequential!(
-    s::AbstractVector{T},
-    z::AbstractVector{T},
-    w::AbstractVector{T},
-    λ::AbstractVector{T},
-    η::AbstractVector{T},
-    rng_cones::AbstractVector,
-    n_shift::Cint,
-    n_sparse_soc::Cint
-) where {T}
-
-    CUDA.@allowscalar for i in 1:n_sparse_soc
-        shift_i = i + n_shift
-        rng_i = rng_cones[shift_i]
-        @views zi = z[rng_i] 
-        @views si = s[rng_i] 
-        @views wi = w[rng_i] 
-        @views λi = λ[rng_i]
-
-        #first calculate the scaled vector w
-        @views zscale = zi[1]*zi[1] - dot(zi[2:end], zi[2:end])
-        zscale = zscale > 0.0 ? sqrt(zscale) : zero(T)
-        @views sscale = si[1]*si[1] - dot(si[2:end], si[2:end])
-        sscale = sscale > 0.0 ? sqrt(sscale) : zero(T)
-
-        #the leading scalar term for W^TW
-        η[i] = sqrt(sscale/zscale)
-
-        # construct w and normalize
-        CUDA.@sync @. w[rng_i] = s[rng_i]/(sscale) - z[rng_i]/(zscale)
-        wi[1]  += 2*zi[1]/(zscale)
-    
-        @views wscale = wi[1]*wi[1] - dot(wi[2:end], wi[2:end])
-        wscale = wscale > 0.0 ? sqrt(wscale) : zero(T)
-        CUDA.@sync wi ./= wscale
-
-        #try to force badly scaled w to come out normalized
-        @views w1sq = dot(wi[2:end], wi[2:end])
-        wi[1] = sqrt(1 + w1sq)
-
-        #Compute the scaling point λ.   Should satisfy λ = Wz = W^{-T}s
-        γi = 0.5 * wscale
-        λi[1] = γi 
-
-        coef = inv(si[1]/sscale + zi[1]/zscale + 2*γi)
-        coef2 = sqrt(sscale*zscale)*coef
-        c1 = ((γi + zi[1]/zscale)/sscale)
-        c2 = ((γi + si[1]/sscale)/zscale)
-
-        CUDA.@sync @. λi[2:end] = coef2*(c1*si[2:end] +c2*zi[2:end])
-        λi[1] *= sqrt(sscale*zscale)
-    end
-end
-
 function _kernel_update_scaling_soc!(
     s::AbstractVector{T},
     z::AbstractVector{T},
@@ -259,8 +197,7 @@ function _kernel_update_scaling_soc!(
     i = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
 
     if i <= n_soc
-        shift_i = i + n_shift
-        rng_i = rng_cones[shift_i]
+        rng_i = rng_cones[i + n_shift]
         @views zi = z[rng_i] 
         @views si = s[rng_i] 
         @views wi = w[rng_i] 
@@ -368,31 +305,6 @@ end
     CUDA.synchronize()
 
     return d
-end
-
-@inline function update_scaling_soc_sparse_sequential!(
-    w::AbstractVector{T},
-    η::AbstractVector{T},
-    d::AbstractVector{T},
-    vut::AbstractVector{T},
-    rng_cones::AbstractVector,
-    numel_linear::Cint,
-    n_shift::Cint,
-    n_sparse_soc::Cint
-) where {T}
-    CUDA.@allowscalar for i in 1:n_sparse_soc
-        shift_i = i + n_shift
-        rng_i = rng_cones[shift_i]
-        len_i = length(rng_i)
-        rng_sparse_i = rng_i .- numel_linear
-        startidx = 2*(rng_sparse_i.stop - len_i)
-        wi = view(w, rng_i)
-        vi = view(vut, (startidx+1):(startidx+len_i))
-        ui = view(vut, (startidx+len_i+1):(startidx+2*len_i))
-        ηi = η[i]
-
-        d[i] = _update_scaling_soc_sparse!(wi,ui,vi,ηi)
-    end
 end
 
 @inline function _kernel_update_scaling_soc_sparse_parallel!(
@@ -532,29 +444,6 @@ end
 
 end
 
-@inline function get_Hs_soc_sparse_sequential!(
-    Hsblocks::AbstractVector{T},
-    η::AbstractVector{T},
-    d::AbstractVector{T},
-    rng_blocks::AbstractVector,
-    n_shift::Cint,
-    n_sparse_soc::Cint
-) where {T}
-
-    #For sparse form, we are returning here the diagonal D block 
-    #from the sparse representation of W^TW, but not the
-    #extra two entries at the bottom right of the block.
-    #The AbstractVector for s and z (and its views) don't
-    #know anything about the 2 extra sparsifying entries
-    CUDA.@allowscalar for i in 1:n_sparse_soc
-        shift_i = i + n_shift
-        rng_block_i = rng_blocks[shift_i]
-        Hsblock_i = view(Hsblocks, rng_block_i)
-        CUDA.@sync @. Hsblock_i = η[i]^2
-        Hsblock_i[1] *= d[i]
-    end
-end
-
 function _kernel_get_Hs_soc_sparse_parallel!(
     Hsblocks::AbstractVector{T},
     η::AbstractVector{T},
@@ -605,33 +494,6 @@ end
 end
 
 # compute the product y = WᵀWx
-@inline function mul_Hs_soc_sequential!(
-    y::AbstractVector{T},
-    x::AbstractVector{T},
-    w::AbstractVector{T},
-    η::AbstractVector{T},
-    rng_cones::AbstractVector,
-    n_shift::Cint,
-    n_sparse_soc::Cint
-) where {T}
-
-    CUDA.@allowscalar for i in 1:n_sparse_soc
-        shift_i = i + n_shift
-        rng_i = rng_cones[shift_i]
-        yi = view(y, rng_i)
-        wi = view(w, rng_i)
-        xi = view(x, rng_i)
-
-        # y = = H^{-1}x = W^TWx
-        # where H^{-1} = \eta^{2} (2*ww^T - J)
-        @. yi= xi
-        c = 2*dot(wi,xi)
-        yi[1] = -xi[1]
-        η2 = η[i]^2
-        CUDA.@sync @. yi = η2*(yi + c*wi)
-    end
-end
-
 function _kernel_mul_Hs_soc!(
     y::AbstractVector{T},
     x::AbstractVector{T},
@@ -709,28 +571,6 @@ end
 end
 
 # returns x = λ ∘ λ for the socone
-@inline function affine_ds_soc_sequential!(
-    ds::AbstractVector{T},
-    λ::AbstractVector{T},
-    rng_cones::AbstractVector,
-    n_shift::Cint,
-    n_sparse_soc::Cint
-) where {T}
-
-    CUDA.@allowscalar for i in 1:n_sparse_soc
-        shift_i = i + n_shift
-        rng_cone_i = rng_cones[shift_i]
-        @views dsi = ds[rng_cone_i] 
-        @views λi = λ[rng_cone_i] 
-
-        #circ product λ∘λ
-        dsi[1] = dot(λi, λi)
-        λi0 = λi[1]
-
-        CUDA.@sync dsi[2:end] = 2*λi0*λi[2:end]
-    end
-end
-
 function _kernel_affine_ds_soc!(
     ds::AbstractVector{T},
     λ::AbstractVector{T},
@@ -777,60 +617,6 @@ end
     blocks = cld(n_soc, threads)
 
     CUDA.@sync kernel(ds, λ, rng_cones, n_shift, n_soc; threads, blocks)
-end
-
-@inline function combined_ds_shift_soc_sequential!(
-    shift::AbstractVector{T},
-    step_z::AbstractVector{T},
-    step_s::AbstractVector{T},
-    w::AbstractVector{T},
-    η::AbstractVector{T},
-    rng_cones::AbstractVector,
-    n_shift::Cint,
-    n_sparse_soc::Cint,
-    σμ::T
-) where {T}
-
-    CUDA.@allowscalar for i in 1:n_sparse_soc
-        shift_i = i + n_shift
-        rng_cone_i = rng_cones[shift_i]
-        @views step_zi = step_z[rng_cone_i] 
-        @views step_si = step_s[rng_cone_i] 
-        @views wi = w[rng_cone_i] 
-        @views shifti = shift[rng_cone_i] 
-    
-        #shift vector used as workspace for a few steps 
-        tmp = shifti            
-
-        #Δz <- WΔz
-        @. tmp = step_zi
-       
-        @views ζ = dot(wi[2:end], step_zi[2:end])
-
-        c = tmp[1] + ζ/(1+wi[1])
-    
-        step_zi[1] = η[i]*(wi[1]*tmp[1] + ζ)
-    
-        CUDA.@sync @. step_zi[2:end] = η[i]*(tmp[2:end] + c*wi[2:end]) 
-
-        #Δs <- W⁻¹Δs
-        @. tmp = step_si         
-        @views ζ = dot(wi[2:end],step_si[2:end])
-
-        c = -tmp[1] + ζ/(1+wi[1])
-    
-        step_si[1] = (one(T)/η[i])*(wi[1]*tmp[1] - ζ)
-    
-        CUDA.@sync @. step_si[2:end] = (one(T)/η[i])*(tmp[2:end] + c*wi[2:end])
-
-        #shift = W⁻¹Δs ∘ WΔz - σμe  
-        val = dot(step_si, step_zi)  
-        shifti[1] = val - σμ 
-
-        s0   = step_si[1]
-        z0   = step_zi[1]
-        CUDA.@sync @. shifti[2:end] = s0*step_zi[2:end] + z0*step_si[2:end]     
-    end
 end
 
 function _kernel_combined_ds_shift_soc!(
@@ -931,50 +717,6 @@ end
     CUDA.@sync kernel(shift, step_z, step_s, w, η, rng_cones, n_shift, n_soc, σμ; threads, blocks)
 end
 
-
-function Δs_from_Δz_offset_soc_sequential!(
-    out::AbstractVector{T},
-    ds::AbstractVector{T},
-    z::AbstractVector{T},
-    w::AbstractVector{T},
-    λ::AbstractVector{T},
-    η::AbstractVector{T},
-    rng_cones::AbstractVector,
-    n_shift::Cint,
-    n_sparse_soc::Cint
-) where {T}
-
-    CUDA.@allowscalar for i in 1:n_sparse_soc
-        #out = Wᵀ(λ \ ds).  Below is equivalent,
-        #but appears to be a little more stable 
-        
-        shift_i = i + n_shift
-        rng_i = rng_cones[shift_i]
-
-        outi = view(out, rng_i)
-        dsi = view(ds, rng_i)
-        zi = view(z, rng_i)
-        wi = view(w, rng_i)
-        λi = view(λ, rng_i)
-        ηi = η[i]
-        resz = _soc_residual(zi)
-
-        @views λ1ds1  = dot(λi[2:end],dsi[2:end])
-        @views w1ds1  = dot(wi[2:end],dsi[2:end])
-
-        CUDA.@sync outi .= -zi
-        outi[1] = +zi[1]
-
-        c = λi[1]*dsi[1] - λ1ds1
-        CUDA.@sync outi .*= c/resz
-
-        outi[1] += ηi*w1ds1
-        CUDA.@sync @views outi[2:end]  .+= ηi*(dsi[2:end] + w1ds1/(1+wi[1]).*wi[2:end])
-
-        CUDA.@sync outi .*= (1/λi[1])
-    end
-end
-
 function _kernel_Δs_from_Δz_offset_soc!(
     out::AbstractVector{T},
     ds::AbstractVector{T},
@@ -1007,7 +749,7 @@ function _kernel_Δs_from_Δz_offset_soc!(
         @views w1ds1  = _dot_xy_gpu(wi,dsi,2:size_i)
 
         _minus_vec_gpu(outi,zi)
-        outi[1] = +zi[1]
+        outi[1] = zi[1]
     
         c = λi[1]*dsi[1] - λ1ds1
         _multiply_gpu(outi,c/reszi)
@@ -1042,33 +784,6 @@ end
     blocks = cld(n_soc, threads)
 
     CUDA.@sync kernel(out, ds, z, w, λ, η, rng_cones, n_shift, n_soc; threads, blocks)
-end
-
-@inline function step_length_soc_sequential(
-    dz::AbstractVector{T},
-    ds::AbstractVector{T},
-     z::AbstractVector{T},
-     s::AbstractVector{T},
-     αmax::T,
-     rng_cones::AbstractVector,
-     n_shift::Cint,
-     n_sparse_soc::Cint
-) where {T}
-
-    CUDA.@allowscalar for i in 1:n_sparse_soc
-        shift_i = i + n_shift
-        rng_cone_i = rng_cones[shift_i]
-        @views si = s[rng_cone_i] 
-        @views dsi = ds[rng_cone_i] 
-        @views zi = z[rng_cone_i] 
-        @views dzi = dz[rng_cone_i]         
-
-        αz   = _step_length_soc_component_gpu_2(zi,dzi,αmax)
-        αs   = _step_length_soc_component_gpu_2(si,dsi,αmax)
-        αmax = min(αmax, αz, αs)
-    end
-
-    return αmax
 end
 
 #return maximum allowable step length while remaining in the socone
@@ -1176,95 +891,6 @@ end
 
     return sum(barrier[1:n_soc])
 end
-
-# # ---------------------------------------------
-# # operations supported by symmetric cones only 
-# # ---------------------------------------------
-
-
-# # implements y = αWx + βy for the socone
-# function mul_W!(
-#     K::SecondOrderCone{T},
-#     is_transpose::Symbol,
-#     y::AbstractVector{T},
-#     x::AbstractVector{T},
-#     α::T,
-#     β::T
-# ) where {T}
-
-#   #NB: symmetric, so ignore transpose
-
-#   # use the fast product method from ECOS ECC paper
-#   @views ζ = dot(K.w[2:end],x[2:end])
-#   c = x[1] + ζ/(1+K.w[1])
-
-#   y[1] = α*K.η*(K.w[1]*x[1] + ζ) + β*y[1]
-
-#   @inbounds for i in 2:length(y)
-#       y[i] = α*K.η*(x[i] + c*K.w[i]) + β*y[i]
-#   end
-
-#   return nothing
-# end
-
-# # implements y = αW^{-1}x + βy for the socone
-# function mul_Winv!(
-#     K::SecondOrderCone{T},
-#     is_transpose::Symbol,
-#     y::AbstractVector{T},
-#     x::AbstractVector{T},
-#     α::T,
-#     β::T
-# ) where {T}
-
-#     #NB: symmetric, so ignore transpose
-
-#     # use the fast inverse product method from ECOS ECC paper
-#     @views ζ = dot(K.w[2:end],x[2:end])
-#     c = -x[1] + ζ/(1+K.w[1])
-
-#     y[1] = (α/K.η)*(K.w[1]*x[1] - ζ) + β*y[1]
-
-#     @inbounds for i = 2:length(y)
-#         y[i] = (α/K.η)*(x[i] + c*K.w[i]) + β*y[i]
-#     end
-
-#     return nothing
-# end
-
-# # implements x = λ \ z for the socone, where λ
-# # is the internally maintained scaling variable.
-# function λ_inv_circ_op!(
-#     K::SecondOrderCone{T},
-#     x::AbstractVector{T},
-#     z::AbstractVector{T}
-# ) where {T}
-
-#     inv_circ_op!(K, x, K.λ, z)
-
-# end
-
-# ---------------------------------------------
-# Jordan algebra operations for symmetric cones 
-# ---------------------------------------------
-
-# # implements x = y \ z for the socone
-# function inv_circ_op!(
-#     K::SecondOrderCone{T},
-#     x::AbstractVector{T},
-#     y::AbstractVector{T},
-#     z::AbstractVector{T}
-# ) where {T}
-
-#     p = _soc_residual(y)
-#     pinv = 1/p
-#     @views v = dot(y[2:end],z[2:end])
-
-#     x[1]      = (y[1]*z[1] - v)*pinv
-#     @views x[2:end] .= pinv.*(v/y[1] - z[1]).*y[2:end] + (1/y[1]).*z[2:end]
-
-#     return nothing
-# end
 
 # ---------------------------------------------
 # internal operations for second order cones 
@@ -1421,4 +1047,1403 @@ end
 
     return min(αmax,r1,r2)
 
+end
+
+
+##################################################################
+# Functional variants for second-order cones
+# (several large socs)
+##################################################################
+@inline function update_scaling_soc_parallel_medium!(
+    s::AbstractVector{T},
+    z::AbstractVector{T},
+    w::AbstractVector{T},
+    λ::AbstractVector{T},
+    η::AbstractVector{T},
+    workz::AbstractVector{T},
+    works::AbstractVector{T},
+    workw::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    #initialize kernel
+    dummy_int = Cint(1024)
+    kernel = @cuda launch=false _kernel_parent_update_scaling(s, z, w, λ, η, workz, works, workw, rng_cones, n_shift, n_sparse_soc, dummy_int)
+    config = launch_configuration(kernel.fun)
+    threads = (1)
+    blocks = (n_sparse_soc)
+
+    #compute a
+    CUDA.@sync kernel(s, z, w, λ, η, workz, works, workw, rng_cones, n_shift, n_sparse_soc, Cint(config.threads); threads, blocks)
+
+end
+
+function _kernel_parent_update_scaling(
+    s::AbstractVector{T}, 
+    z::AbstractVector{T}, 
+    w::AbstractVector{T}, 
+    λ::AbstractVector{T}, 
+    η::AbstractVector{T}, 
+    workz::AbstractVector{T},
+    works::AbstractVector{T},
+    workw::AbstractVector{T},
+    rng_cones::AbstractVector, 
+    n_shift::Cint,
+    n_sparse_soc::Cint, 
+    maxthread::Cint
+) where {T}
+    tidx = (blockIdx().x - one(Cint)) * blockDim().x + threadIdx().x
+    if tidx <= n_sparse_soc
+        shift = n_shift + tidx
+        len_tid = rng_cones[shift].stop - rng_cones[shift].start + one(Cint)
+        #thread-block info for cone-wise operations
+        thread = min(len_tid, maxthread)
+
+        #thread-block info for cone-wise operations without conic features
+        thread_plus = min(len_tid, maxthread)
+        block_uniform = cld(len_tid, thread_plus)
+
+        # Calculate shared memory size per block
+        shmem = thread * sizeof(T)
+
+        #first calculate the scaled vector w
+        @cuda threads = thread blocks = 1 shmem = shmem dynamic = true _kernel_child_dot(z, workz, rng_cones[shift].start+one(Cint), rng_cones[shift].stop, tidx)
+        @cuda threads = thread blocks = 1 shmem = shmem dynamic = true _kernel_child_dot(s, works, rng_cones[shift].start+one(Cint), rng_cones[shift].stop, tidx)
+        device_synchronize()
+
+        z1_tid = z[rng_cones[shift].start]
+        s1_tid = s[rng_cones[shift].start]
+        zscale_tid = z1_tid*z1_tid - workz[tidx]
+        zscale_tid = zscale_tid > zero(T) ? sqrt(zscale_tid) : zero(T)
+        sscale_tid = s1_tid*s1_tid - works[tidx]
+        sscale_tid = sscale_tid > zero(T) ? sqrt(sscale_tid) : zero(T)
+
+        #the leading scalar term for W^TW
+        η[tidx] = sqrt(sscale_tid/zscale_tid)
+
+        # construct w and normalize
+        # CUDA.@sync @. w[rng_i] = s[rng_i]/(sscale) - z[rng_i]/(zscale)
+        minus_zscale_inv_tid = -inv(zscale_tid)
+        sscale_inv_tid = inv(sscale_tid)
+        @cuda threads = thread_plus blocks = block_uniform dynamic = true _kernel_axpby(z, s, w, minus_zscale_inv_tid, sscale_inv_tid, rng_cones[shift].start, rng_cones[shift].stop) 
+        device_synchronize()
+        w[rng_cones[shift].start]  += 2*z[rng_cones[shift].start]/(zscale_tid)
+
+        #     @views wscale = wi[1]*wi[1] - dot(wi[2:end], wi[2:end])
+        #     wscale = wscale > 0.0 ? sqrt(wscale) : zero(T)
+        #     CUDA.@sync wi ./= wscale
+        @cuda threads = thread blocks = 1 shmem = shmem dynamic = true _kernel_child_dot(w, workw, rng_cones[shift].start+one(Cint), rng_cones[shift].stop, tidx)
+        device_synchronize()
+        w1_tid = w[rng_cones[shift].start]
+        wscale_tid = w1_tid*w1_tid - workw[tidx]
+        wscale_tid = wscale_tid > zero(T) ? sqrt(wscale_tid) : zero(T)
+
+        @cuda threads = thread_plus blocks = block_uniform dynamic = true _kernel_div_w(w, wscale_tid, rng_cones[shift].start, rng_cones[shift].stop)
+        device_synchronize()
+
+        #     #try to force badly scaled w to come out normalized
+        #     @views w1sq = dot(wi[2:end], wi[2:end])
+        #     wi[1] = sqrt(1 + w1sq)
+        @cuda threads = thread blocks = 1 shmem = shmem dynamic = true _kernel_child_dot(w, workw, rng_cones[shift].start+one(Cint), rng_cones[shift].stop, tidx)
+        device_synchronize()
+        w[rng_cones[shift].start] = sqrt(1 + workw[tidx])
+
+        #Compute the scaling point λ.   Should satisfy λ = Wz = W^{-T}s
+        γ_tid = 0.5 * wscale_tid
+        λ[rng_cones[shift].start] = γ_tid * sqrt(sscale_tid*zscale_tid)
+
+        coef = inv(s[rng_cones[shift].start]/sscale_tid + z[rng_cones[shift].start]/zscale_tid + 2*γ_tid)
+        coef2 = sqrt(sscale_tid*zscale_tid)*coef
+        c1 = coef2*((γ_tid + z[rng_cones[shift].start]/zscale_tid)/sscale_tid)
+        c2 = coef2*((γ_tid + s[rng_cones[shift].start]/sscale_tid)/zscale_tid)
+
+        #     CUDA.@sync @. λi[2:end] = c1*si[2:end] +c2*zi[2:end]
+        @cuda threads = thread_plus blocks = block_uniform dynamic = true _kernel_axpby(s, z, λ, c1, c2, rng_cones[shift].start+one(Cint), rng_cones[shift].stop) 
+    
+    end
+    return nothing
+end
+
+function _kernel_div_w(
+    w::AbstractVector{T}, 
+    wscale_tid::T, 
+    start_idx::Cint, 
+    end_idx::Cint
+) where {T} 
+    tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x - one(Cint) + start_idx
+
+    if tid <= end_idx
+        w[tid] = w[tid]/wscale_tid
+    end
+    return nothing
+end
+
+##########################################################
+# update_scaling_soc_sparse!
+##########################################################
+@inline function update_scaling_soc_sparse_parallel_medium!(
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    d::AbstractVector{T},
+    vut::AbstractVector{T},
+    rng_cones::AbstractVector,
+    numel_linear::Cint,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    dummy_int = Cint(1024)
+    kernel = @cuda launch=false _kernel_parent_update_scaling_soc_sparse(w, η, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc, dummy_int)
+    config = launch_configuration(kernel.fun)
+    threads = (1)
+    blocks = (n_sparse_soc)
+
+    CUDA.@sync kernel(w, η, d, vut, rng_cones, numel_linear, n_shift, n_sparse_soc, Cint(config.threads); threads, blocks)
+
+end
+
+function _kernel_parent_update_scaling_soc_sparse(
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    d::AbstractVector{T},
+    vut::AbstractVector{T},
+    rng_cones::AbstractVector,
+    numel_linear::Cint,
+    n_shift::Cint,
+    n_sparse_soc::Cint, 
+    maxthread::Cint
+) where {T}
+    tidx = (blockIdx().x - one(Cint)) * blockDim().x + threadIdx().x
+    if tidx <= n_sparse_soc
+        shift = n_shift + tidx
+        len_tid = rng_cones[shift].stop - rng_cones[shift].start + one(Cint)
+
+        #thread-block info for cone-wise operations without conic features
+        thread_plus = min(len_tid, maxthread)
+        block_uniform = cld(len_tid, thread_plus)
+
+        w1_tid = w[rng_cones[shift].start]
+        α_tid  = 2*w1_tid
+        wsq_tid    = 2*w1_tid*w1_tid - 1
+        wsqinv_tid = 1/wsq_tid
+        d_tid    = wsqinv_tid / 2
+        d[tidx] = d_tid
+
+        u0_tid  = sqrt(wsq_tid - d_tid)
+        u1_tid = α_tid/u0_tid
+        v1_tid = sqrt( 2*(2 + wsqinv_tid)/(2*wsq_tid - wsqinv_tid))
+
+        minus_η2_tid = -η[tidx]*η[tidx] 
+        # u[1] = minus_η2*u0, v[1] = 0
+        shift_vu = Cint(2)*(rng_cones[shift].stop - numel_linear - len_tid)
+        vut[shift_vu+len_tid+one(Cint)] = minus_η2_tid*u0_tid
+        vut[shift_vu+one(Cint)] = zero(T)
+        # @views u[2:end] .= minus_η2.*u1.*w[2:end]
+        # @views v[2:end] .= minus_η2.*v1.*w[2:end]
+        @cuda threads = thread_plus blocks = (2*block_uniform) dynamic = true _kernel_child_update_scaling_soc_sparse(w, vut, minus_η2_tid, u1_tid, v1_tid, shift_vu, rng_cones[shift].start, rng_cones[shift].stop, len_tid, block_uniform)
+    end    
+
+    return nothing      
+end
+
+function _kernel_child_update_scaling_soc_sparse(
+    w::AbstractVector{T}, 
+    vut::AbstractVector{T}, 
+    minus_η2::T, 
+    u1::T, 
+    v1::T, 
+    shift_vu::Cint, 
+    start_idx::Cint, 
+    end_idx::Cint,
+    len::Cint, 
+    block_shift::Cint
+) where {T}
+    # v part
+    if (blockIdx().x <= block_shift)
+        tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x + shift_vu + one(Cint)   #skip v0
+        tid_w = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x + start_idx      #skip w0
+
+        if (tid_w <= end_idx)
+            vut[tid] = minus_η2*v1*w[tid_w]
+        end
+    # u part
+    else
+        tid = (blockIdx().x - block_shift -one(Cint))*blockDim().x+threadIdx().x + shift_vu + one(Cint) + len #skip u0
+        tid_w = (blockIdx().x - block_shift -one(Cint))*blockDim().x+threadIdx().x + start_idx      #skip w0
+
+        if (tid_w <= end_idx)
+            vut[tid] = minus_η2*u1*w[tid_w]
+        end
+    end
+
+    return nothing
+end
+
+##########################################################
+# get_Hs_soc!
+##########################################################
+@inline function get_Hs_soc_sparse_parallel_medium!(
+    Hsblocks::AbstractVector{T},
+    η::AbstractVector{T},
+    d::AbstractVector{T},
+    rng_blocks::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    dummy_int = Cint(1024)
+    kernel = @cuda launch=false _kernel_parent_get_Hs_soc(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc, dummy_int)
+    config = launch_configuration(kernel.fun)
+    threads = (1)
+    blocks = (n_sparse_soc)
+
+    CUDA.@sync kernel(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc, Cint(config.threads); threads, blocks)
+
+end
+
+function _kernel_parent_get_Hs_soc(
+    Hsblocks::AbstractVector{T}, 
+    η::AbstractVector{T}, 
+    d::AbstractVector{T}, 
+    rng_blocks::AbstractVector, 
+    n_shift::Cint, 
+    n_sparse_soc::Cint, 
+    maxthread::Cint
+) where {T}
+    tidx = (blockIdx().x - one(Cint)) * blockDim().x + threadIdx().x
+    if tidx <= n_sparse_soc
+        shift = n_shift + tidx
+        len_tid = rng_blocks[shift].stop - rng_blocks[shift].start + one(Cint)
+        #thread-block info for cone-wise operations
+        thread = min(len_tid, maxthread)
+
+        #thread-block info for cone-wise operations without conic features
+        thread_plus = min(len_tid, maxthread)
+        block_uniform = cld(len_tid, thread_plus)
+
+        η2_tid = η[tidx]*η[tidx]
+        Hsblocks[rng_blocks[shift].start] = η2_tid*d[tidx]
+        @cuda threads = thread_plus blocks = block_uniform dynamic = true _kernel_child_get_Hs(Hsblocks, η2_tid, rng_blocks[shift].start+one(Cint), rng_blocks[shift].stop)
+    end    
+
+    return nothing    
+end
+
+function _kernel_child_get_Hs(
+    Hsblocks::AbstractVector{T}, 
+    η2::T, 
+    start_idx::Cint, 
+    end_idx::Cint
+) where {T}
+    tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x - one(Cint) + start_idx
+    if tid <= end_idx
+        Hsblocks[tid] = η2
+    end
+
+    return nothing   
+end
+
+##########################################################
+# mul_Hs_soc!
+##########################################################
+@inline function mul_Hs_soc_parallel_medium!(
+    y::AbstractVector{T},
+    x::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    work::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    dummy_int = Cint(1024)
+    kernel = @cuda launch=false _kernel_parent_mul_Hs_soc(y, x, w, η, work, rng_cones, n_shift, n_sparse_soc, dummy_int)
+    config = launch_configuration(kernel.fun)
+    threads = (1)
+    blocks = (n_sparse_soc)
+
+    CUDA.@sync kernel(y, x, w, η, work, rng_cones, n_shift, n_sparse_soc, Cint(config.threads); threads, blocks)
+
+end
+
+function _kernel_parent_mul_Hs_soc(
+    y::AbstractVector{T}, 
+    x::AbstractVector{T}, 
+    w::AbstractVector{T}, 
+    η::AbstractVector{T}, 
+    work::AbstractVector{T}, 
+    rng_cones::AbstractVector, 
+    n_shift::Cint, 
+    n_sparse_soc::Cint, 
+    maxthread::Cint
+) where {T}
+    tidx = (blockIdx().x - one(Cint)) * blockDim().x + threadIdx().x
+    if tidx <= n_sparse_soc
+        shift = n_shift + tidx
+        len_tid = rng_cones[shift].stop - rng_cones[shift].start + one(Cint)
+        #thread-block info for cone-wise operations
+        thread = min(len_tid, maxthread)
+
+        #thread-block info for cone-wise operations without conic features
+        thread_plus = min(len_tid, maxthread)
+        block_uniform = cld(len_tid, thread_plus)
+
+        # Calculate shared memory size per block
+        shmem = thread * sizeof(T)
+
+        # y = = H^{-1}x = W^TWx
+        # where H^{-1} = \eta^{2} (2*ww^T - J)
+        @cuda threads = thread blocks = 1 shmem = shmem dynamic = true _kernel_child_dot(x, w, work, rng_cones[shift].start, rng_cones[shift].stop, tidx)
+        device_synchronize()
+
+        c_tid = 2*work[tidx]
+        η2_tid = η[tidx]*η[tidx]
+        y[rng_cones[shift].start] = η2_tid*(-x[rng_cones[shift].start] + c_tid*w[rng_cones[shift].start])
+        @cuda threads = thread_plus blocks = block_uniform dynamic = true _kernel_child_mul_Hs(y, x, w, c_tid, η2_tid, rng_cones[shift].start+one(Cint), rng_cones[shift].stop)
+    end    
+
+    return nothing
+end
+
+function _kernel_child_mul_Hs(
+    y::AbstractVector{T}, 
+    x::AbstractVector{T}, 
+    w::AbstractVector{T}, 
+    c::T, 
+    η2::T, 
+    start_idx::Cint, 
+    end_idx::Cint
+) where {T}
+    tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x - one(Cint) + start_idx
+    if tid <= end_idx
+        y[tid] = η2*(x[tid] + c*w[tid])
+    end
+    return nothing    
+end
+##########################################################
+# affine_ds_soc!
+##########################################################
+@inline function affine_ds_soc_parallel_medium!(
+    ds::AbstractVector{T},
+    λ::AbstractVector{T},
+    work::AbstractVector{T}, 
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    #initialize kernel
+    dummy_int = Cint(1024)
+    kernel = @cuda launch=false _kernel_parent_affine_ds_soc(ds, λ, work, rng_cones, n_shift, n_sparse_soc, dummy_int)
+    config = launch_configuration(kernel.fun)
+    threads = (1)
+    blocks = (n_sparse_soc)
+
+    CUDA.@sync kernel(ds, λ, work, rng_cones, n_shift, n_sparse_soc, Cint(config.threads); threads, blocks)
+
+end
+
+function _kernel_parent_affine_ds_soc(
+    ds::AbstractVector{T}, 
+    λ::AbstractVector{T}, 
+    work::AbstractVector{T}, 
+    rng_cones::AbstractVector, 
+    n_shift::Cint, 
+    n_sparse_soc::Cint, 
+    maxthread::Cint
+) where {T}
+    tidx = (blockIdx().x - one(Cint)) * blockDim().x + threadIdx().x
+    if tidx <= n_sparse_soc
+        shift = n_shift + tidx
+        len_tid = rng_cones[shift].stop - rng_cones[shift].start + one(Cint)
+        #thread-block info for cone-wise operations
+        thread = min(len_tid, maxthread)
+
+        #thread-block info for cone-wise operations without conic features
+        thread_plus = min(len_tid, maxthread)
+        block_uniform = cld(len_tid, thread_plus)
+
+        # Calculate shared memory size per block
+        shmem = thread * sizeof(T)
+
+        @cuda threads = thread blocks = 1 shmem = shmem dynamic = true _kernel_child_dot(λ, work, rng_cones[shift].start, rng_cones[shift].stop, tidx)
+        device_synchronize()
+
+        ds[rng_cones[shift].start] = work[tidx]
+        c_tid = 2*λ[rng_cones[shift].start]
+        @cuda threads = thread_plus blocks = block_uniform dynamic = true _kernel_child_affine_ds(ds, λ, c_tid, rng_cones[shift].start+one(Cint), rng_cones[shift].stop)
+    end
+    
+    return nothing       
+end
+
+function _kernel_child_affine_ds(
+    ds::AbstractVector{T}, 
+    λ::AbstractVector{T}, 
+    c::T,
+    start_idx::Cint, 
+    end_idx::Cint
+) where {T} 
+
+    tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x - one(Cint) + start_idx
+    if tid <= end_idx
+        ds[tid] = c*λ[tid]
+    end
+    return nothing
+end
+
+##########################################################
+# combined_ds_shift_soc!
+##########################################################
+@inline function combined_ds_shift_soc_parallel_medium!(
+    shift::AbstractVector{T},
+    step_z::AbstractVector{T},
+    step_s::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    workz::AbstractVector{T}, 
+    works::AbstractVector{T}, 
+    work::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint,
+    σμ::T
+) where {T}
+
+    #initialize kernel
+    dummy_int = Cint(1024)
+    kernel = @cuda launch=false _kernel_parent_combined_ds_shift_soc(shift, step_z, step_s, w, η, workz, works, work, rng_cones, n_shift, n_sparse_soc, σμ, dummy_int)
+    config = launch_configuration(kernel.fun)
+    threads = (1)
+    blocks = (n_sparse_soc)
+
+    CUDA.@sync kernel(shift, step_z, step_s, w, η, workz, works, work, rng_cones, n_shift, n_sparse_soc, σμ, Cint(config.threads); threads, blocks)
+
+end
+
+function _kernel_parent_combined_ds_shift_soc(
+    shift_vec::AbstractVector{T}, 
+    step_z::AbstractVector{T}, 
+    step_s::AbstractVector{T}, 
+    w::AbstractVector{T}, 
+    η::AbstractVector{T}, 
+    workz::AbstractVector{T}, 
+    works::AbstractVector{T}, 
+    work::AbstractVector{T}, 
+    rng_cones::AbstractVector, 
+    n_shift::Cint, 
+    n_sparse_soc::Cint, 
+    σμ::T, 
+    maxthread::Cint
+) where {T}
+    tidx = (blockIdx().x - one(Cint)) * blockDim().x + threadIdx().x
+    if tidx <= n_sparse_soc
+        shift = n_shift + tidx
+        len_tid = rng_cones[shift].stop - rng_cones[shift].start + one(Cint)
+        #thread-block info for cone-wise operations
+        thread = min(len_tid, maxthread)
+
+        #thread-block info for cone-wise operations without conic features
+        thread_plus = min(len_tid, maxthread)
+        block_uniform = cld(len_tid, thread_plus)
+
+        # Calculate shared memory size per block
+        shmem = thread * sizeof(T)
+
+        @cuda threads = thread blocks = 2 shmem = shmem dynamic = true _kernel_child_combined_ds_shift_dot(w, step_z, step_s, workz, works, rng_cones[shift].start+one(Cint), rng_cones[shift].stop, tidx)
+        device_synchronize()
+
+        η_tid = η[tidx]
+        w1_tid = w[rng_cones[shift].start]
+        stepz1_tid = step_z[rng_cones[shift].start]
+        steps1_tid = step_s[rng_cones[shift].start]
+        ζz_tid = workz[tidx]
+        ζs_tid = works[tidx]
+        cz_tid = stepz1_tid + ζz_tid/(1+w1_tid)
+        cs_tid = -steps1_tid + ζs_tid/(1+w1_tid)
+        step_z[rng_cones[shift].start] = η_tid*(w1_tid*stepz1_tid + ζz_tid)
+        step_s[rng_cones[shift].start] = (one(T)/η_tid)*(w1_tid*steps1_tid - ζs_tid)
+        
+    #     CUDA.@sync @. step_zi[2:end] = η[i]*(tmpz[2:end] + cz*wi[2:end]) 
+    #     CUDA.@sync @. step_si[2:end] = (one(T)/η[i])*(tmps[2:end] + cs*wi[2:end])
+        @cuda threads = thread_plus blocks = (2*block_uniform) dynamic = true _kernel_child_combined_ds_shift_axpby(w, step_z, step_s, cz_tid, cs_tid, η_tid, rng_cones[shift].start+one(Cint), rng_cones[shift].stop, block_uniform) 
+        device_synchronize()
+        
+    #     #shift = W⁻¹Δs ∘ WΔz - σμe  
+    #     val = dot(step_si, step_zi)  
+    #     shifti[1] = val - σμ 
+        @cuda threads = thread blocks = 1 shmem = shmem dynamic = true _kernel_child_dot(step_s, step_z, work, rng_cones[shift].start, rng_cones[shift].stop, tidx)
+        device_synchronize()
+        
+        shift_vec[rng_cones[shift].start] = work[tidx] - σμ
+
+        s0_tid   = step_s[rng_cones[shift].start]
+        z0_tid   = step_z[rng_cones[shift].start]
+    #     CUDA.@sync @. shifti[2:end] = s0*step_zi[2:end] + z0*step_si[2:end]  
+        @cuda threads = thread_plus blocks = block_uniform dynamic = true _kernel_child_combined_ds_shift_circdot(shift_vec, step_z, step_s, z0_tid, s0_tid, rng_cones[shift].start+one(Cint), rng_cones[shift].stop) 
+    end
+    
+    return nothing    
+    
+end
+
+function _kernel_child_combined_ds_shift_dot(
+    w::AbstractVector{T}, 
+    step_z::AbstractVector{T},
+    step_s::AbstractVector{T}, 
+    workz::AbstractVector{T},
+    works::AbstractVector{T},     
+    start_idx::Cint, 
+    end_idx::Cint, 
+    idx::Cint
+) where {T}
+    tid = threadIdx().x
+    blockSize = blockDim().x
+    blockID = blockIdx().x
+
+    # shared memory for reduction
+    shmem = @cuDynamicSharedMem(T, blockSize)
+
+    temp = zero(T)
+    i = (tid - one(Cint)) + start_idx
+    stride = blockDim().x               # assumed to use only one thread-block
+    
+    if (blockID == 1)
+        while i <= end_idx
+            temp += w[i]*step_z[i]
+            i += stride
+        end
+    elseif (blockID == 2)
+        while i <= end_idx
+            temp += w[i]*step_s[i]
+            i += stride
+        end
+    end
+
+    # Store to shared memory
+    shmem[tid] = temp
+    sync_threads()
+    
+    # Block-level reduction
+    # Note: the initial offset should be rounded to power of 2
+    offset = nextpow(2, blockSize) >> 1
+    while offset > 0
+        if tid <= offset && tid + offset <= blockSize
+            shmem[tid] += shmem[tid + offset]
+        end
+        sync_threads()
+        offset >>= 1
+    end
+
+    # Store partial sum to global memory
+    if tid == 1
+        if (blockID == 1)
+            workz[idx] = shmem[1]
+        elseif (blockID == 2)
+            works[idx] = shmem[1]
+        end
+    end
+
+    return nothing
+end
+
+function _kernel_child_combined_ds_shift_axpby(
+    w::AbstractVector{T}, 
+    step_z::AbstractVector{T},
+    step_s::AbstractVector{T},  
+    cz::T,
+    cs::T,
+    η::T, 
+    start_idx::Cint, 
+    end_idx::Cint,
+    block_shift::Cint           #alternative as the dynamic parallism doesn't support 2-dim blocks
+) where {T}
+    if (blockIdx().x <= block_shift)
+        tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x - one(Cint) + start_idx
+
+        if tid <= end_idx
+            step_z[tid] = η*(step_z[tid] + cz*w[tid]) 
+        end
+    else
+        tid = (blockIdx().x - block_shift -one(Cint))*blockDim().x+threadIdx().x - one(Cint) + start_idx
+
+        if tid <= end_idx
+            step_s[tid] = (one(T)/η)*(step_s[tid] + cs*w[tid])
+        end
+    end
+
+    return nothing
+end
+
+function _kernel_child_combined_ds_shift_circdot(
+    shift::AbstractVector{T}, 
+    step_z::AbstractVector{T}, 
+    step_s::AbstractVector{T}, 
+    z0::T, 
+    s0::T, 
+    start_idx::Cint, 
+    end_idx::Cint
+) where {T}
+    tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x - one(Cint) + start_idx
+    
+    if tid <= end_idx
+        shift[tid] = s0*step_z[tid] + z0*step_s[tid]
+    end
+
+    return nothing
+end
+
+##########################################################
+# Δs_from_Δz_offset_soc
+##########################################################
+function Δs_from_Δz_offset_soc_parallel_medium!(
+    out::AbstractVector{T},
+    ds::AbstractVector{T},
+    z::AbstractVector{T},
+    w::AbstractVector{T},
+    λ::AbstractVector{T},
+    η::AbstractVector{T},
+    workz::AbstractVector{T}, 
+    workλ::AbstractVector{T}, 
+    workw::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    #initialize kernel
+    dummy_int = Cint(1024)
+    kernel = @cuda launch=false _kernel_parent_Δs_from_Δz_offset_soc(out, ds, z, w, λ, η, workz, workλ, workw, rng_cones, n_shift, n_sparse_soc, dummy_int)
+    config = launch_configuration(kernel.fun)
+    threads = (1)
+    blocks = (n_sparse_soc)
+
+    CUDA.@sync kernel(out, ds, z, w, λ, η, workz, workλ, workw, rng_cones, n_shift, n_sparse_soc, Cint(config.threads); threads, blocks)
+
+end
+
+function _kernel_parent_Δs_from_Δz_offset_soc(
+    out::AbstractVector{T}, 
+    ds::AbstractVector{T}, 
+    z::AbstractVector{T}, 
+    w::AbstractVector{T}, 
+    λ::AbstractVector{T}, 
+    η::AbstractVector{T}, 
+    workz::AbstractVector{T}, 
+    workλ::AbstractVector{T}, 
+    workw::AbstractVector{T}, 
+    rng_cones::AbstractVector, 
+    n_shift::Cint, 
+    n_sparse_soc::Cint, 
+    maxthread::Cint
+) where {T}
+    tidx = (blockIdx().x - one(Cint)) * blockDim().x + threadIdx().x
+    if tidx <= n_sparse_soc
+        shift = n_shift + tidx
+        len_tid = rng_cones[shift].stop - rng_cones[shift].start + one(Cint)
+        #thread-block info for cone-wise operations
+        thread = min(len_tid, maxthread)
+
+        #thread-block info for cone-wise operations without conic features
+        thread_plus = min(len_tid, maxthread)
+        block_uniform = cld(len_tid, thread_plus)
+
+        # Calculate shared memory size per block
+        shmem = thread * sizeof(T)
+
+        @cuda threads = thread blocks = 3 shmem = shmem dynamic = true _kernel_child_Δs_from_Δz_offset_dot(ds, z, λ, w, workz, workλ, workw, rng_cones[shift].start+one(Cint), rng_cones[shift].stop, tidx)
+        device_synchronize()
+
+        η_tid = η[tidx]
+        z1_tid = z[rng_cones[shift].start]
+        resz_tid = z1_tid*z1_tid - workz[tidx]
+        λ1ds1_tid = workλ[tidx]
+        w1ds1_tid = workw[tidx]
+        λ1_inv_tid = one(T)/(λ[rng_cones[shift].start])
+
+        c1 = (λ[rng_cones[shift].start]*ds[rng_cones[shift].start] - λ1ds1_tid)/resz_tid
+        c2 = w1ds1_tid/(1+w[rng_cones[shift].start])
+
+        out[rng_cones[shift].start] = λ1_inv_tid*(c1*z[rng_cones[shift].start] + η_tid*w1ds1_tid)
+        @cuda threads = thread_plus blocks = block_uniform dynamic = true _kernel_child_Δs_from_Δz_offset_soc(out, z, ds, w, c1, c2, η_tid, λ1_inv_tid, rng_cones[shift].start+one(Cint), rng_cones[shift].stop) 
+    end
+
+    return nothing
+end
+
+function _kernel_child_Δs_from_Δz_offset_dot(
+    ds::AbstractVector{T}, 
+    z::AbstractVector{T}, 
+    λ::AbstractVector{T},
+    w::AbstractVector{T},
+    workz::AbstractVector{T}, 
+    workλ::AbstractVector{T}, 
+    workw::AbstractVector{T}, 
+    start_idx::Cint, 
+    end_idx::Cint, 
+    idx::Cint
+) where {T}
+    tid = threadIdx().x
+    blockSize = blockDim().x
+    blockID = blockIdx().x
+
+    # shared memory for reduction
+    shmem = @cuDynamicSharedMem(T, blockSize)
+
+    temp = zero(T)
+    i = (tid - one(Cint)) + start_idx                 
+    stride = blockDim().x               
+    
+    if (blockID == 1)
+        while i <= end_idx
+            temp += z[i]*z[i]
+            i += stride
+        end
+    elseif (blockID == 2)
+        while i <= end_idx
+            temp += λ[i]*ds[i]
+            i += stride
+        end
+    elseif (blockID == 3)
+        while i <= end_idx
+            temp += w[i]*ds[i]
+            i += stride
+        end
+    end
+
+    # Store to shared memory
+    shmem[tid] = temp
+    sync_threads()
+    
+    # Block-level reduction
+    # Note: the initial offset should be rounded to power of 2
+    offset = nextpow(2, blockSize) >> 1
+    while offset > 0
+        if tid <= offset && tid + offset <= blockSize
+            shmem[tid] += shmem[tid + offset]
+        end
+        sync_threads()
+        offset >>= 1
+    end
+
+    # Store partial sum to global memory
+    if tid == 1
+        if (blockID == 1)
+            workz[idx] = shmem[1]
+        elseif (blockID == 2)
+            workλ[idx] = shmem[1]
+        elseif (blockID == 3)
+            workw[idx] = shmem[1]
+        end
+    end
+
+    return nothing
+end
+
+function _kernel_child_Δs_from_Δz_offset_soc(
+    out::AbstractVector{T}, 
+    z::AbstractVector{T}, 
+    ds::AbstractVector{T}, 
+    w::AbstractVector{T}, 
+    c1::T, 
+    c2::T, 
+    η::T, 
+    λ1_inv::T, 
+    start_idx::Cint, 
+    end_idx::Cint
+) where {T}
+    tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x - one(Cint) + start_idx
+
+    if tid <= end_idx
+        out[tid] = (-c1*z[tid] + η*(ds[tid] + c2*w[tid]))*λ1_inv
+    end
+
+    return nothing
+end
+
+##########################################################
+# Step size computation
+##########################################################
+@inline function step_length_soc_parallel_medium(
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+     z::AbstractVector{T},
+     s::AbstractVector{T},
+     worka::AbstractVector{T},
+     workb::AbstractVector{T},
+     workc::AbstractVector{T},
+     αmax::T,
+     rng_cones::AbstractVector,
+     n_shift::Cint,
+     n_sparse_soc::Cint
+) where {T}
+
+    # assume that x is in the SOC, and find the minimum positive root
+    # of the quadratic equation:  ||x₁+αy₁||^2 = (x₀ + αy₀)^2
+
+    _step_length_soc_sparse(z, dz, s, ds, worka, workb, workc, n_shift, n_sparse_soc, rng_cones, αmax) 
+    αmax = minimum(worka)   #YC: use UnifiedMemory for minimization on CPU will be slightly faster
+
+    return αmax
+end
+
+function _step_length_soc_sparse(
+    z::AbstractVector{T}, 
+    dz::AbstractVector{T}, 
+    s::AbstractVector{T}, 
+    ds::AbstractVector{T}, 
+    a::AbstractVector{T}, 
+    b::AbstractVector{T}, 
+    c::AbstractVector{T}, 
+    n_shift::Cint,
+    n_sparse_soc::Cint, 
+    rng_cones::AbstractVector, 
+    αmax::T
+) where {T}
+    #initialize kernel
+    dummy_int = Cint(1024)
+    kernel = @cuda launch=false _kernel_parent_step_length(z, dz, s, ds, a, b, c, αmax, n_shift, n_sparse_soc, rng_cones, dummy_int)
+    config = launch_configuration(kernel.fun)
+    threads = (1)
+    blocks = (n_sparse_soc)
+
+    #compute a
+    CUDA.@sync kernel(z, dz, s, ds, a, b, c, αmax, n_shift, n_sparse_soc, rng_cones, Cint(config.threads); threads, blocks)
+
+end
+
+#parent compute
+function _kernel_parent_step_length(
+    z::AbstractVector{T}, 
+    dz::AbstractVector{T}, 
+    s::AbstractVector{T}, 
+    ds::AbstractVector{T}, 
+    a::AbstractVector{T}, 
+    b::AbstractVector{T}, 
+    c::AbstractVector{T}, 
+    αmax::T,
+    n_shift::Cint,
+    n_sparse_soc::Cint, 
+    rng_cones::AbstractVector, 
+    maxthread::Cint
+) where {T}
+    tidx = (blockIdx().x - one(Cint)) * blockDim().x + threadIdx().x
+    if tidx <= n_sparse_soc
+        shift = n_shift + tidx
+        len_tid = rng_cones[shift].stop - rng_cones[shift].start + one(Cint)
+        thread = min(len_tid, maxthread)
+
+        # Calculate shared memory size per block
+        shmem = thread * sizeof(T)
+
+        @cuda threads = thread blocks = 3 shmem = shmem dynamic = true _kernel_child_step_length_dot(z, dz, a, b, c, rng_cones[shift].start, rng_cones[shift].stop, tidx)
+        device_synchronize()
+        αz = _compute_step_soc(z[rng_cones[shift].start], dz[rng_cones[shift].start], a[tidx], b[tidx], c[tidx], αmax)
+        @cuda threads = thread blocks = 3 shmem = shmem dynamic = true _kernel_child_step_length_dot(s, ds, a, b, c, rng_cones[shift].start, rng_cones[shift].stop, tidx)
+        device_synchronize()
+        αs = _compute_step_soc(s[rng_cones[shift].start], ds[rng_cones[shift].start], a[tidx], b[tidx], c[tidx], αmax)
+        a[tidx] = min(αz, αs)
+    end
+    return nothing
+end
+
+@inline function _compute_step_soc(x::T, y::T, a::T, b::T, c::T, αmax::T) where {T}
+    if x >= 0 && y < 0
+        αmax = min(αmax,-x/y)
+    end
+
+    d = b^2 - 4*a*c
+
+    if(c < 0)
+        return -Inf
+    end
+
+    if( (a > 0 && b > 0) || d < 0)
+        return αmax
+
+    elseif a == 0
+        return αmax
+
+    elseif c == 0
+        return (a >= 0 ? αmax : zero(T)) 
+    end 
+
+    t = (b >= 0) ? (-b - sqrt(d)) : (-b + sqrt(d))
+
+    r1 = (2*c)/t;
+    r2 = t/(2*a);
+
+    r1 = r1 < 0 ? floatmax(T) : r1
+    r2 = r2 < 0 ? floatmax(T) : r2
+
+    return min(αmax,r1,r2)
+end
+
+#child compute
+function _kernel_child_step_length_dot(
+    x::AbstractVector{T}, 
+    y::AbstractVector{T}, 
+    a::AbstractVector{T}, 
+    b::AbstractVector{T}, 
+    c::AbstractVector{T}, 
+    start_idx::Cint, 
+    end_idx::Cint, 
+    idx::Cint
+) where {T}
+    tid = threadIdx().x
+    blockSize = blockDim().x
+    blockID = blockIdx().x
+    # global_tid = (blockID - one(Cint)) * blockSize + tid
+
+    # shared memory for reduction
+    shmem = @cuDynamicSharedMem(T, blockSize)
+
+    temp = zero(T)
+    i = tid + start_idx                 # Skip x[1], y[1]
+    stride = blockDim().x               # 
+    
+    if (blockID == 1)
+        while i <= end_idx
+            temp += y[i]*y[i]
+            i += stride
+        end
+    elseif (blockID == 2)
+        while i <= end_idx
+            temp += x[i]*y[i]
+            i += stride
+        end
+    elseif (blockID == 3)
+        while i <= end_idx
+            temp += x[i]*x[i]
+            i += stride
+        end
+    end
+
+    # Store to shared memory
+    shmem[tid] = temp
+    sync_threads()
+    
+    # Block-level reduction
+    # Note: the initial offset should be rounded to power of 2
+    offset = nextpow(2, blockSize) >> 1
+    while offset > 0
+        if tid <= offset && tid + offset <= blockSize
+            shmem[tid] += shmem[tid + offset]
+        end
+        sync_threads()
+        offset >>= 1
+    end
+
+    # @views a = y[1]*y[1] - dot(y[2:end], y[2:end]) #NB: could be negative
+    # @views b = 2*(x[1]*y[1] - dot(x[2:end],y[2:end]))
+    # @views c = max(zero(T), x[1]*x[1] - dot(x[2:end], x[2:end])) #should be ≥0
+    # Store partial sum to global memory
+    if tid == 1
+        if (blockID == 1)
+            a[idx] = y[start_idx]*y[start_idx] - shmem[1]
+        elseif (blockID == 2)
+            b[idx] = (x[start_idx]*y[start_idx] - shmem[1]) * 2
+        elseif (blockID == 3)
+            c[idx] = max(zero(T), x[start_idx]*x[start_idx] - shmem[1])
+        end
+    end
+
+    return nothing
+end
+
+
+#######################################################
+# basic child operations
+#######################################################
+# a[idx] = <x[idx], x[idx]>
+function _kernel_child_dot(
+    x::AbstractVector{T}, 
+    a::AbstractVector{T}, 
+    start_idx::Cint, 
+    end_idx::Cint, 
+    idx::Cint
+) where {T}
+    tid = threadIdx().x
+    blockSize = blockDim().x
+
+    # shared memory for reduction
+    shmem = @cuDynamicSharedMem(T, blockSize)
+
+    temp = zero(T)
+    i = (tid - one(Cint)) + start_idx
+    stride = blockDim().x               # assumed to use only one thread-block
+    
+    while i <= end_idx
+        xi = x[i]
+        temp += xi*xi
+        i += stride
+    end
+
+    # Store to shared memory
+    shmem[tid] = temp
+    sync_threads()
+    
+    # Block-level reduction
+    # Note: the initial offset should be rounded to power of 2
+    offset = nextpow(2, blockSize) >> 1
+    while offset > 0
+        if tid <= offset && tid + offset <= blockSize
+            shmem[tid] += shmem[tid + offset]
+        end
+        sync_threads()
+        offset >>= 1
+    end
+
+    # Store partial sum to global memory
+    if tid == 1
+        a[idx] = shmem[1]
+    end
+
+    return nothing
+end
+
+# a[idx] = <x[idx], y[idx]>
+function _kernel_child_dot(
+    x::AbstractVector{T}, 
+    y::AbstractVector{T},
+    a::AbstractVector{T}, 
+    start_idx::Cint, 
+    end_idx::Cint, 
+    idx::Cint
+) where {T}
+    tid = threadIdx().x
+    blockSize = blockDim().x
+
+    # shared memory for reduction
+    shmem = @cuDynamicSharedMem(T, blockSize)
+
+    temp = zero(T)
+    i = (tid - one(Cint)) + start_idx
+    stride = blockDim().x               # assumed to use only one thread-block
+    
+    while i <= end_idx
+        temp += x[i]*y[i]
+        i += stride
+    end
+
+    # Store to shared memory
+    shmem[tid] = temp
+    sync_threads()
+    
+    # Block-level reduction
+    # Note: the initial offset should be rounded to power of 2
+    offset = nextpow(2, blockSize) >> 1
+    while offset > 0
+        if tid <= offset && tid + offset <= blockSize
+            shmem[tid] += shmem[tid + offset]
+        end
+        sync_threads()
+        offset >>= 1
+    end
+
+    # Store partial sum to global memory
+    if tid == 1
+        a[idx] = shmem[1]
+    end
+
+    return nothing
+end
+
+# z = a*x + b*y
+function _kernel_axpby(
+    x::AbstractVector{T}, 
+    y::AbstractVector{T},  
+    z::AbstractVector{T}, 
+    a::T, 
+    b::T, 
+    start_idx::Cint, 
+    end_idx::Cint
+) where {T} 
+    tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x - one(Cint) + start_idx
+
+    if tid <= end_idx
+        z[tid] = a*x[tid] + b*y[tid]
+    end
+    return nothing
+end
+
+##################################################################
+# Functional variants for second-order cones (Pending)
+# (potentially for several huge socs)
+##################################################################
+@inline function update_scaling_soc_sequential!(
+    s::AbstractVector{T},
+    z::AbstractVector{T},
+    w::AbstractVector{T},
+    λ::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+        @views zi = z[rng_i] 
+        @views si = s[rng_i] 
+        @views wi = w[rng_i] 
+        @views λi = λ[rng_i]
+
+        #first calculate the scaled vector w
+        @views zscale = zi[1]*zi[1] - dot(zi[2:end], zi[2:end])
+        zscale = zscale > 0.0 ? sqrt(zscale) : zero(T)
+        @views sscale = si[1]*si[1] - dot(si[2:end], si[2:end])
+        sscale = sscale > 0.0 ? sqrt(sscale) : zero(T)
+
+        #the leading scalar term for W^TW
+        η[i] = sqrt(sscale/zscale)
+
+        # construct w and normalize
+        CUDA.@sync @. w[rng_i] = s[rng_i]/(sscale) - z[rng_i]/(zscale)
+        wi[1]  += 2*zi[1]/(zscale)
+    
+        @views wscale = wi[1]*wi[1] - dot(wi[2:end], wi[2:end])
+        wscale = wscale > 0.0 ? sqrt(wscale) : zero(T)
+        CUDA.@sync wi ./= wscale
+
+        #try to force badly scaled w to come out normalized
+        @views w1sq = dot(wi[2:end], wi[2:end])
+        wi[1] = sqrt(1 + w1sq)
+
+        #Compute the scaling point λ.   Should satisfy λ = Wz = W^{-T}s
+        γi = 0.5 * wscale
+        λi[1] = γi 
+
+        coef = inv(si[1]/sscale + zi[1]/zscale + 2*γi)
+        coef2 = sqrt(sscale*zscale)*coef
+        c1 = ((γi + zi[1]/zscale)/sscale)
+        c2 = ((γi + si[1]/sscale)/zscale)
+
+        CUDA.@sync @. λi[2:end] = coef2*(c1*si[2:end] +c2*zi[2:end])
+        λi[1] *= sqrt(sscale*zscale)
+    end
+end
+
+
+@inline function update_scaling_soc_sparse_sequential!(
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    d::AbstractVector{T},
+    vut::AbstractVector{T},
+    rng_cones::AbstractVector,
+    numel_linear::Cint,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+        len_i = length(rng_i)
+        rng_sparse_i = rng_i .- numel_linear
+        startidx = 2*(rng_sparse_i.stop - len_i)
+        wi = view(w, rng_i)
+        vi = view(vut, (startidx+1):(startidx+len_i))
+        ui = view(vut, (startidx+len_i+1):(startidx+2*len_i))
+        ηi = η[i]
+
+        d[i] = _update_scaling_soc_sparse!(wi,ui,vi,ηi)
+    end
+end
+
+@inline function get_Hs_soc_sparse_sequential!(
+    Hsblocks::AbstractVector{T},
+    η::AbstractVector{T},
+    d::AbstractVector{T},
+    rng_blocks::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    #For sparse form, we are returning here the diagonal D block 
+    #from the sparse representation of W^TW, but not the
+    #extra two entries at the bottom right of the block.
+    #The AbstractVector for s and z (and its views) don't
+    #know anything about the 2 extra sparsifying entries
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_block_i = rng_blocks[shift_i]
+        Hsblock_i = view(Hsblocks, rng_block_i)
+        CUDA.@sync @. Hsblock_i = η[i]^2
+        Hsblock_i[1] *= d[i]
+    end
+end
+
+@inline function mul_Hs_soc_sequential!(
+    y::AbstractVector{T},
+    x::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+        yi = view(y, rng_i)
+        wi = view(w, rng_i)
+        xi = view(x, rng_i)
+
+        # y = = H^{-1}x = W^TWx
+        # where H^{-1} = \eta^{2} (2*ww^T - J)
+        @. yi= xi
+        c = 2*dot(wi,xi)
+        yi[1] = -xi[1]
+        η2 = η[i]^2
+        CUDA.@sync @. yi = η2*(yi + c*wi)
+    end
+end
+
+@inline function affine_ds_soc_sequential!(
+    ds::AbstractVector{T},
+    λ::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_cone_i = rng_cones[shift_i]
+        @views dsi = ds[rng_cone_i] 
+        @views λi = λ[rng_cone_i] 
+
+        #circ product λ∘λ
+        dsi[1] = dot(λi, λi)
+        λi0 = λi[1]
+
+        CUDA.@sync dsi[2:end] = 2*λi0*λi[2:end]
+    end
+end
+
+
+@inline function combined_ds_shift_soc_sequential!(
+    shift::AbstractVector{T},
+    step_z::AbstractVector{T},
+    step_s::AbstractVector{T},
+    w::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint,
+    σμ::T
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_cone_i = rng_cones[shift_i]
+        @views step_zi = step_z[rng_cone_i] 
+        @views step_si = step_s[rng_cone_i] 
+        @views wi = w[rng_cone_i] 
+        @views shifti = shift[rng_cone_i] 
+    
+        #shift vector used as workspace for a few steps 
+        tmp = shifti            
+
+        #Δz <- WΔz
+        @. tmp = step_zi
+       
+        @views ζ = dot(wi[2:end], step_zi[2:end])
+
+        c = tmp[1] + ζ/(1+wi[1])
+    
+        step_zi[1] = η[i]*(wi[1]*tmp[1] + ζ)
+    
+        CUDA.@sync @. step_zi[2:end] = η[i]*(tmp[2:end] + c*wi[2:end]) 
+
+        #Δs <- W⁻¹Δs
+        @. tmp = step_si         
+        @views ζ = dot(wi[2:end],step_si[2:end])
+
+        c = -tmp[1] + ζ/(1+wi[1])
+    
+        step_si[1] = (one(T)/η[i])*(wi[1]*tmp[1] - ζ)
+    
+        CUDA.@sync @. step_si[2:end] = (one(T)/η[i])*(tmp[2:end] + c*wi[2:end])
+
+        #shift = W⁻¹Δs ∘ WΔz - σμe  
+        val = dot(step_si, step_zi)  
+        shifti[1] = val - σμ 
+
+        s0   = step_si[1]
+        z0   = step_zi[1]
+        CUDA.@sync @. shifti[2:end] = s0*step_zi[2:end] + z0*step_si[2:end]     
+    end
+end
+
+
+function Δs_from_Δz_offset_soc_sequential!(
+    out::AbstractVector{T},
+    ds::AbstractVector{T},
+    z::AbstractVector{T},
+    w::AbstractVector{T},
+    λ::AbstractVector{T},
+    η::AbstractVector{T},
+    rng_cones::AbstractVector,
+    n_shift::Cint,
+    n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        #out = Wᵀ(λ \ ds).  Below is equivalent,
+        #but appears to be a little more stable 
+        
+        shift_i = i + n_shift
+        rng_i = rng_cones[shift_i]
+
+        outi = view(out, rng_i)
+        dsi = view(ds, rng_i)
+        zi = view(z, rng_i)
+        wi = view(w, rng_i)
+        λi = view(λ, rng_i)
+        ηi = η[i]
+        resz = _soc_residual(zi)
+
+        @views λ1ds1  = dot(λi[2:end],dsi[2:end])
+        @views w1ds1  = dot(wi[2:end],dsi[2:end])
+
+        CUDA.@sync outi .= -zi
+        outi[1] = zi[1]
+
+        c = λi[1]*dsi[1] - λ1ds1
+        CUDA.@sync outi .*= c/resz
+
+        outi[1] += ηi*w1ds1
+        CUDA.@sync @views outi[2:end]  .+= ηi*(dsi[2:end] + w1ds1/(1+wi[1]).*wi[2:end])
+
+        CUDA.@sync outi .*= (1/λi[1])
+    end
+end
+
+
+@inline function step_length_soc_sequential(
+    dz::AbstractVector{T},
+    ds::AbstractVector{T},
+     z::AbstractVector{T},
+     s::AbstractVector{T},
+     αmax::T,
+     rng_cones::AbstractVector,
+     n_shift::Cint,
+     n_sparse_soc::Cint
+) where {T}
+
+    CUDA.@allowscalar for i in 1:n_sparse_soc
+        shift_i = i + n_shift
+        rng_cone_i = rng_cones[shift_i]
+        @views si = s[rng_cone_i] 
+        @views dsi = ds[rng_cone_i] 
+        @views zi = z[rng_cone_i] 
+        @views dzi = dz[rng_cone_i]         
+
+        αz   = _step_length_soc_component_gpu_2(zi,dzi,αmax)
+        αs   = _step_length_soc_component_gpu_2(si,dsi,αmax)
+        αmax = min(αmax, αz, αs)
+    end
+
+    return αmax
 end

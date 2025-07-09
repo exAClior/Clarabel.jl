@@ -60,14 +60,19 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
     Rinv::CuArray{T,3}
     Hspsd::CuArray{T,3}
 
+    #step_size
+    α::CuVector{T}
+
     #workspace for various internal uses
     workmat1::CuArray{T,3}
     workmat2::CuArray{T,3}
     workmat3::CuArray{T,3}
     workvec::CuVector{T}
 
-    #step_size
-    α::CuVector{T}
+    #workspace for sparse socs
+    worksoc1::Union{CuVector{T}, Nothing}
+    worksoc2::Union{CuVector{T}, Nothing}
+    worksoc3::Union{CuVector{T}, Nothing}
 
     function CompositeConeGPU{T}(cone_specs::Vector{SupportedCone}, soc_threshold::Int) where {T}
 
@@ -79,13 +84,13 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         end
         cone_orders = nothing
 
-        n_zero = count(x -> typeof(x) == ZeroConeT, cone_specs)
-        n_nn = count(x -> typeof(x) == NonnegativeConeT, cone_specs)
+        n_zero = Cint(count(x -> typeof(x) == ZeroConeT, cone_specs))
+        n_nn = Cint(count(x -> typeof(x) == NonnegativeConeT, cone_specs))
         n_linear = n_zero + n_nn
-        n_soc = count(x -> typeof(x) == SecondOrderConeT, cone_specs)
-        n_exp = count(x -> typeof(x) == ExponentialConeT, cone_specs)
-        n_pow = count(x -> typeof(x) == PowerConeT, cone_specs)
-        n_psd = count(x -> typeof(x) == PSDTriangleConeT, cone_specs)
+        n_soc = Cint(count(x -> typeof(x) == SecondOrderConeT, cone_specs))
+        n_exp = Cint(count(x -> typeof(x) == ExponentialConeT, cone_specs))
+        n_pow = Cint(count(x -> typeof(x) == PowerConeT, cone_specs))
+        n_psd = Cint(count(x -> typeof(x) == PSDTriangleConeT, cone_specs))
 
         type_counts = Dict{Type,DefaultInt}()
         if n_zero > 0
@@ -124,8 +129,8 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
         rng_cones  = CuVector{UnitRange{Cint}}(collect(rng_cones_iterator(cone_specs)));
         rng_blocks = CuVector{UnitRange{Cint}}(collect(rng_blocks_iterator_full(cone_specs, soc_threshold)));
 
-        @views numel_linear  = sum(cone -> nvars(cone), cone_specs[1:n_linear]; init = 0)
-        @views numel_soc  = sum(cone -> nvars(cone), cone_specs[n_linear+1:n_linear+n_soc]; init = 0)
+        @views numel_linear  = Cint(sum(cone -> nvars(cone), cone_specs[1:n_linear]; init = 0))
+        @views numel_soc  = Cint(sum(cone -> nvars(cone), cone_specs[n_linear+1:n_linear+n_soc]; init = 0))
 
         w = CuVector{T}(undef,numel_linear+numel_soc)
         λ = CuVector{T}(undef,numel_linear+numel_soc)
@@ -172,35 +177,24 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
 
         α = CuVector{T}(undef, numel) #workspace for step size calculation and neighborhood check
 
-        #count up elements and degree
+        #Sparse second-order cone
         #idx set for sparse socs 
         @views n_sparse_soc = Cint(count(cone -> (nvars(cone) > soc_threshold), cone_specs[(n_linear+1):(n_linear+n_soc)]))
         n_dense_soc = n_soc - n_sparse_soc
         d = CuVector{T}(undef, n_sparse_soc)
+
+
+        worksoc1 = n_sparse_soc > 0 ? CuVector{T}(undef, n_sparse_soc) : nothing
+        worksoc2 = n_sparse_soc > 0 ? CuVector{T}(undef, n_sparse_soc) : nothing
+        worksoc3 = n_sparse_soc > 0 ? CuVector{T}(undef, n_sparse_soc) : nothing
 
         @views numel_sparse_soc  = sum(cone -> nvars(cone), cone_specs[n_linear+1:n_linear+n_sparse_soc]; init = 0)
         vut = CuVector{T}(undef, 2*numel_sparse_soc)
         rowptr = CuVector{Cint}(undef, 2*n_sparse_soc+1)
         colval = CuVector{Cint}(undef, 2*numel_sparse_soc)
 
-        CUDA.@allowscalar begin
-            rowptr[1] = one(Cint)
-            for i in one(Cint):n_sparse_soc
-                shift_i = i + n_linear
-                rng_i = rng_cones[shift_i]
-                len_i = Cint(length(rng_i))
-    
-                rowptr[2*i] = len_i
-                rowptr[2*i+1] = len_i
-    
-                rng_sparse_i = rng_i .- numel_linear
-                startidx = 2*(rng_sparse_i.stop - len_i)
-                colvi = view(colval, (startidx+1):(startidx+len_i))
-                colui = view(colval, (startidx+len_i+1):(startidx+2*len_i))
-                copyto!(colvi, collect(rng_i))
-                copyto!(colui, collect(rng_i))
-            end
-        end
+        #Initialize off-diagonals off sparse socs
+        _sparse_soc_initialization_sequential!(rowptr, colval, rng_cones, numel_linear, n_linear, n_sparse_soc) 
 
         accumulate!(+, rowptr, rowptr)
 
@@ -211,8 +205,9 @@ struct CompositeConeGPU{T} <: AbstractCone{T}
                 idx_eq, idx_inq,
                 w, λ, η, d, vut, Matvut,
                 αp,H_dual,Hs,grad,
-                psd_dim, chol1, chol2, SVD, λpsd, Λisqrt, R, Rinv, Hspsd, workmat1, workmat2, workmat3, workvec,
-                α)
+                psd_dim, chol1, chol2, SVD, λpsd, Λisqrt, R, Rinv, Hspsd, α,
+                workmat1, workmat2, workmat3, workvec,
+                worksoc1, worksoc2, worksoc3)
     end
 end
 
@@ -260,3 +255,35 @@ function Base.iterate(iter::RangeBlocksIteratorFull, state=(1, 1))
         return (start:stop, state)
     end 
 end 
+
+
+# ------------------------------------
+# initi offdiagonal terms for sparse socs
+function _sparse_soc_initialization_sequential!(
+    rowptr::AbstractVector{Cint}, 
+    colval::AbstractVector{Cint}, 
+    rng_cones::AbstractVector, 
+    numel_linear::Cint, 
+    n_linear::Cint, 
+    n_sparse_soc::Cint
+) 
+    CUDA.@allowscalar begin
+        rowptr[1] = one(Cint)
+        for i in one(Cint):n_sparse_soc
+            shift_i = i + n_linear
+            rng_i = rng_cones[shift_i]
+            len_i = Cint(length(rng_i))
+
+            rowptr[2*i] = len_i
+            rowptr[2*i+1] = len_i
+
+            rng_sparse_i = rng_i .- numel_linear
+            startidx = 2*(rng_sparse_i.stop - len_i)
+            colvi = view(colval, (startidx+1):(startidx+len_i))
+            colui = view(colval, (startidx+len_i+1):(startidx+2*len_i))
+            copyto!(colvi, collect(rng_i))
+            copyto!(colui, collect(rng_i))
+        end
+    end    
+end
+

@@ -213,8 +213,11 @@ function update_scaling!(
     update_scaling_nonnegative!(s, z, w, λ, rng_cones, idx_inq)
 
     n_shift = n_linear
-    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
-        update_scaling_soc_sequential!(s, z, w, λ, η, rng_cones, n_shift, n_sparse_soc)
+
+    if n_sparse_soc > 0 && n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        update_scaling_soc_parallel_medium!(s, z, w, λ, η, 
+                                            cones.worksoc1, cones.worksoc2, cones.worksoc3, 
+                                            rng_cones, n_shift, n_sparse_soc)
         n_shift += n_sparse_soc
         n_soc -= n_sparse_soc
     end
@@ -227,8 +230,8 @@ function update_scaling!(
     # off-diagonal update
     if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
         update_scaling_soc_sparse_parallel!(w, η, d, vut, rng_cones, numel_linear, n_linear, n_sparse_soc)
-    else
-        update_scaling_soc_sparse_sequential!(w, η, d, vut, rng_cones, numel_linear, n_linear, n_sparse_soc)
+    elseif n_sparse_soc > 0
+        update_scaling_soc_sparse_parallel_medium!(w, η, d, vut, rng_cones, numel_linear, n_linear, n_sparse_soc)
     end
 
     if n_exp > 0
@@ -282,7 +285,7 @@ function get_Hs!(
         if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
             get_Hs_soc_sparse_parallel!(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc)
         elseif n_sparse_soc > 0
-            get_Hs_soc_sparse_sequential!(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc)
+            get_Hs_soc_sparse_parallel_medium!(Hsblocks, η, d, rng_blocks, n_shift, n_sparse_soc)
         end
 
         if n_dense_soc > 0 
@@ -339,8 +342,10 @@ function mul_Hs!(
     mul_Hs_nonnegative!(y, x, w, rng_cones, idx_inq)
 
     n_shift = n_linear
-    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
-        mul_Hs_soc_sequential!(y, x, w, η, rng_cones, n_shift, n_sparse_soc)
+    if n_sparse_soc > 0 && n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        mul_Hs_soc_parallel_medium!(y, x, w, η, 
+                            cones.worksoc1,
+                            rng_cones, n_shift, n_sparse_soc)
         n_shift += n_sparse_soc
         n_soc -= n_sparse_soc
     end
@@ -430,8 +435,10 @@ function affine_ds!(
     affine_ds_nonnegative!(ds, λ, rng_cones, idx_inq)
 
     n_shift = n_linear
-    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
-        affine_ds_soc_sequential!(ds, λ, rng_cones, n_shift, n_sparse_soc)
+    if n_sparse_soc > 0 && n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        affine_ds_soc_parallel_medium!(ds, λ,
+                            cones.worksoc1,
+                            rng_cones, n_shift, n_sparse_soc)
         n_shift += n_sparse_soc
         n_soc -= n_sparse_soc
     end
@@ -484,8 +491,10 @@ function combined_ds_shift!(
     combined_ds_shift_nonnegative!(shift, step_z, step_s, σμ, rng_cones, idx_inq)
 
     n_shift = n_linear
-    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
-        combined_ds_shift_soc_sequential!(shift, step_z, step_s, w, η, rng_cones, n_shift, n_sparse_soc, σμ)
+    if n_sparse_soc > 0 && n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        combined_ds_shift_soc_parallel_medium!(shift, step_z, step_s, w, η, 
+                                cones.worksoc1, cones.worksoc2, cones.worksoc3,
+                                rng_cones, n_shift, n_sparse_soc, σμ)
         n_shift += n_sparse_soc
         n_soc -= n_sparse_soc
     end
@@ -538,8 +547,10 @@ function Δs_from_Δz_offset!(
     Δs_from_Δz_offset_nonnegative!(out, ds, z, rng_cones, idx_inq)
 
     n_shift = n_linear
-    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
-        Δs_from_Δz_offset_soc_sequential!(out, ds, z, w, λ, η, rng_cones, n_shift, n_sparse_soc)
+    if n_sparse_soc > 0 && n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        Δs_from_Δz_offset_soc_parallel_medium!(out, ds, z, w, λ, η, 
+                                                cones.worksoc1, cones.worksoc2, cones.worksoc3,
+                                                rng_cones, n_shift, n_sparse_soc)
         n_shift += n_sparse_soc
         n_soc -= n_sparse_soc
     end
@@ -597,8 +608,10 @@ function step_length(
 
     n_shift = n_linear
     n_parallel_soc = n_soc
-    if n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
-        αmax = step_length_soc_sequential(dz, ds, z, s, αmax, rng_cones, n_shift, n_sparse_soc)
+    if n_sparse_soc > 0 && n_sparse_soc <= SPARSE_SOC_PARALELL_NUM
+        αmax = step_length_soc_parallel_medium(dz, ds, z, s, 
+                            cones.worksoc1, cones.worksoc2, cones.worksoc3,
+                            αmax, rng_cones, n_shift, n_sparse_soc)
         n_shift += n_sparse_soc
         n_parallel_soc -= n_sparse_soc
     end

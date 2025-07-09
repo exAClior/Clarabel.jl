@@ -189,18 +189,8 @@ function _kktsolver_update_inner!(
     CUDA.@sync @. kktsolver.Hsblocks *= -one(T)
     _update_values!(GPUsolver,KKT,map.Hsblocks,kktsolver.Hsblocks)
 
-    n_shift = cones.n_linear
-    n_sparse_soc = cones.n_sparse_soc
-    numel_linear = cones.numel_linear
-    rng_cones = cones.rng_cones
-    η = cones.η
-
     # Update for the KKT part of the sparse socs
-    if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
-        update_KKT_sparse_soc_parallel!(KKT.nzVal, η, map.D, map.vu, map.vut, cones.vut, rng_cones, numel_linear, n_shift, n_sparse_soc)
-    elseif n_sparse_soc > 0
-        update_KKT_sparse_soc_sequential!(GPUsolver, KKT, map, cones)
-    end
+    _update_KKT_sparse_expandable(GPUsolver, KKT, map, cones)
 
     return _kktsolver_regularize_and_refactor!(kktsolver, GPUsolver)
 
@@ -479,6 +469,25 @@ function _get_refine_error!(
     return norme
 end
 
+# update offdiagonal terms for socs in KKT
+function _update_KKT_sparse_expandable(
+    GPUsolver::AbstractDirectLDLSolver{T},
+    KKT::CuSparseMatrix{T},
+    map::GPUDataMap,
+    cones::CompositeConeGPU{T}
+) where {T}
+    n_sparse_soc = cones.n_sparse_soc
+    n_shift = cones.n_linear
+    if n_sparse_soc > SPARSE_SOC_PARALELL_NUM
+        update_KKT_sparse_soc_parallel!(KKT.nzVal, cones.η, map.D, map.vu, map.vut, cones.vut, cones.rng_cones, cones.numel_linear, n_shift, n_sparse_soc)
+    elseif n_sparse_soc > 0
+        update_KKT_sparse_soc_parallel_medium(KKT.nzVal, cones.η, map.D, map.vu, map.vut, cones.vut, cones.rng_cones, n_shift, n_sparse_soc)
+    end
+end
+
+#################################################################
+# kernel functions for GPU parallel computation w.r.t. ldl
+#################################################################
 #Parallel update for KKT of the sparse socs
 function _kernel_update_KKT_sparse_soc_parallel!(
     nzVal::AbstractVector{T},
@@ -538,6 +547,95 @@ end
     CUDA.@sync kernel(nzVal, η, D, vu, vut, vutval, rng_cones, numel_linear, n_shift, n_sparse_soc; threads, blocks)
 
 end
+
+###########################################################
+# update_KKT_sparse_soc (several large socs)
+###########################################################
+@inline function update_KKT_sparse_soc_parallel_medium(
+    nzval::AbstractVector{T}, 
+    η::AbstractVector{T}, 
+    mapD::AbstractVector{Cint},
+    mapvu::AbstractVector{Cint}, 
+    mapvut::AbstractVector{Cint}, 
+    vut::AbstractVector{T}, 
+    rng_cones::AbstractVector,
+    n_shift::Cint, 
+    n_sparse_soc::Cint
+) where {T}
+    #initialize kernel
+    dummy_int = Cint(1024)
+    kernel = @cuda launch=false _kernel_parent_update_KKT_sparse_soc(nzval, η, mapD, mapvu, mapvut, vut, rng_cones, n_shift, n_sparse_soc, dummy_int)
+    config = launch_configuration(kernel.fun)
+    threads = (1)
+    blocks = (n_sparse_soc)
+
+    CUDA.@sync kernel(nzval, η, mapD, mapvu, mapvut, vut, rng_cones, n_shift, n_sparse_soc, Cint(config.threads); threads, blocks)
+
+end
+
+function _kernel_parent_update_KKT_sparse_soc(
+    nzval::AbstractVector{T}, 
+    η::AbstractVector{T}, 
+    mapD::AbstractVector{Cint},
+    mapvu::AbstractVector{Cint}, 
+    mapvut::AbstractVector{Cint}, 
+    vut::AbstractVector{T}, 
+    rng_cones::AbstractVector,
+    n_shift::Cint, 
+    n_sparse_soc::Cint, 
+    maxthread::Cint
+) where {T}
+    tidx = (blockIdx().x - one(Cint)) * blockDim().x + threadIdx().x
+    if tidx <= n_sparse_soc
+        shift = n_shift + tidx
+
+        #size should be doubled for v,u
+        offset_tid = (rng_cones[shift].start - rng_cones[n_shift + one(Cint)].start)*Cint(2)  
+        len_tid = (rng_cones[shift].stop - rng_cones[shift].start + one(Cint))*Cint(2)
+
+        #thread-block info for cone-wise operations
+        thread = min(len_tid, maxthread)
+        block_uniform = cld(len_tid, thread)
+
+        # update D blocks
+        η2 = η[tidx]*η[tidx]
+        nzval[mapD[Cint(2)*tidx - one(Cint)]] = -η2
+        nzval[mapD[Cint(2)*tidx]] = η2
+
+        @cuda threads = thread blocks = (2*block_uniform) dynamic = true _kernel_child_update_KKT_sparse_soc(vut, nzval, mapvu, mapvut, offset_tid, len_tid, block_uniform)
+    end
+    
+    return nothing    
+end
+
+function _kernel_child_update_KKT_sparse_soc(
+    vut::AbstractVector{T}, 
+    nzval::AbstractVector{T}, 
+    mapvu::AbstractVector{Cint}, 
+    mapvut::AbstractVector{Cint}, 
+    offset::Cint, 
+    len::Cint,
+    block_shift::Cint
+) where {T}
+    # vu part
+    if (blockIdx().x <= block_shift)
+        tid = (blockIdx().x-one(Cint))*blockDim().x+threadIdx().x
+        if (tid <= len)
+            nzval[mapvu[tid+offset]] = vut[tid+offset]
+        end
+    # vut part
+    else
+        tid = (blockIdx().x - block_shift -one(Cint))*blockDim().x+threadIdx().x
+        if (tid <= len)
+            nzval[mapvut[tid+offset]] = vut[tid+offset]
+        end
+    end
+    return nothing
+end
+
+###########################################################
+# update_KKT_sparse_soc (Huge socs)
+###########################################################
 
 #Sequential update for KKT of the sparse socs
 @inline function update_KKT_sparse_soc_sequential!(
