@@ -19,6 +19,9 @@ struct CUDSSDirectLDLSolver{T} <: AbstractDirectLDLSolver{T}
 
         cudssSolver = CUDSS.CudssSolver(KKT, "S", 'F')
 
+        # allow hybrid use of GPU and CPU
+        cudss_set(cudssSolver, "hybrid_execute_mode", 1)
+
         cudss("analysis", cudssSolver, x, b)
         cudss("factorization", cudssSolver, x, b)
 
